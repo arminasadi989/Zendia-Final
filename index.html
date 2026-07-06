@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <script id="vite-hmr-loop-fix">
+      // Prevent Vite's client from going into infinite reload loops when websocket fails/disconnects inside iframe
+      (function() {
+        const OriginalWebSocket = window.WebSocket;
+        window.WebSocket = function(url, protocols) {
+          if (protocols === 'vite-hmr' || (typeof url === 'string' && url.includes('vite'))) {
+            console.log('Intercepted Vite HMR WebSocket connection to prevent infinite reload loops.');
+            const dummy = {
+              url: url,
+              readyState: 1, // OPEN
+              send: function() {},
+              close: function() {},
+              addEventListener: function(event, callback) {
+                if (event === 'open') {
+                  setTimeout(() => callback({}), 10);
+                }
+              },
+              removeEventListener: function() {},
+              dispatchEvent: function() {}
+            };
+            return dummy;
+          }
+          return new OriginalWebSocket(url, protocols);
+        };
+        // Carry over prototype and statics
+        window.WebSocket.prototype = OriginalWebSocket.prototype;
+        for (let key in OriginalWebSocket) {
+          if (OriginalWebSocket.hasOwnProperty(key)) {
+            window.WebSocket[key] = OriginalWebSocket[key];
+          }
+        }
+      })();
+    </script>
+    <title>Zendia - تحلیل و آوای هوشمند</title>
+    <!-- Google Fonts: Orbitron for Brand -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400..900&display=swap" rel="stylesheet">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Tahoma', 'Arial', 'sans-serif'],
+              mono: ['Courier New', 'Courier', 'monospace'],
+              broken: ['"Orbitron"', 'sans-serif'],
+            },
+            colors: {
+              primary: {
+                50: '#ecfeff',
+                100: '#cffafe',
+                200: '#a5f3fc',
+                300: '#67e8f9',
+                400: '#22d3ee',
+                500: '#06b6d4',
+                600: '#0891b2',
+                700: '#0e7490',
+                800: '#155e75',
+                900: '#164e63',
+                950: '#083344',
+              },
+              slate: {
+                850: '#1e293b',
+                900: '#0f172a',
+                950: '#020617',
+              }
+            },
+            animation: {
+              'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+              'equalizer': 'equalizer 1s ease-in-out infinite',
+              'scan-line': 'scanLine 3s linear infinite',
+            },
+            keyframes: {
+              equalizer: {
+                '0%, 100%': { height: '20%', opacity: '0.5' },
+                '50%': { height: '100%', opacity: '1' },
+              },
+              scanLine: {
+                '0%': { transform: 'translateX(-100%)' },
+                '100%': { transform: 'translateX(200%)' },
+              }
+            }
+          },
+        },
+      }
+    </script>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0"
+  }
+}
+</script>
+<style>
+  /* Hide scrollbar for Chrome, Safari and Opera */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  /* Hide scrollbar for IE, Edge and Firefox */
+  .no-scrollbar {
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
+  }
+  
+  body {
+    background-image: radial-gradient(circle at 50% 10%, #1e293b 0%, #020617 100%);
+    background-attachment: fixed;
+    overscroll-behavior: none; /* Prevent bounce effect on mobile */
+  }
+  
+  /* Glassmorphism Utilities */
+  .glass {
+    background: rgba(15, 23, 42, 0.6);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  
+  .glass-heavy {
+    background: rgba(2, 6, 23, 0.85);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-top: 1px solid rgba(34, 211, 238, 0.1);
+  }
+</style>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-slate-950 text-slate-200 h-screen w-screen overflow-hidden selection:bg-primary-500 selection:text-white">
+    <div id="root" class="h-full w-full"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
