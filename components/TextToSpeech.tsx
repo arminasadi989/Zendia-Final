@@ -944,15 +944,15 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
         {/* CENTER CONTENT AREA */}
         <div className="flex-1 relative overflow-hidden flex flex-col w-full">
             <div className={`absolute inset-0 px-6 pt-2 pb-14 transition-all duration-500 ease-out transform ${viewMode === 'INPUT' ? 'opacity-100 translate-x-0 z-20' : 'opacity-0 translate-x-10 -z-10 pointer-events-none'}`}>
-                 <div className="h-full flex flex-col pt-0 gap-1 items-center overflow-hidden pb-2">
+                 <div className="h-full w-full flex flex-col pt-0 gap-1 items-center overflow-y-auto no-scrollbar pb-6">
                      {(inputType === 'TOPIC' || inputType === 'DAILY_TOPIC') && (
-                         <div className="w-full h-full flex flex-col items-center gap-2 pb-0">
+                         <div className="w-full flex-none flex flex-col items-center gap-2 pb-0">
                              <div className="w-full flex-none relative group mb-0">
                                  <div className="absolute inset-0 bg-gradient-to-r from-primary-500/10 to-purple-500/10 rounded-xl blur-sm group-hover:blur-md transition-all"></div>
                                  <input type="text" value={customTopic} onChange={(e) => { setCustomTopic(e.target.value); if (e.target.value) setSelectedTopic(''); }} onKeyDown={handleInputKeyDown} placeholder="یک موضوع خبری یا یک خبر خاص را بنویسید" className={`w-full h-10 md:h-12 bg-slate-900/80 border ${customTopic ? 'border-primary-500 shadow-[0_0_12px_rgba(34,211,238,0.2)]' : 'border-slate-700'} rounded-xl px-4 text-xs font-medium text-center text-white placeholder-slate-500 focus:outline-none focus:border-primary-400 transition-all z-10 relative`} />
                                  {!customTopic && <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-600 pointer-events-none z-20"><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg></div>}
                              </div>
-                             <div className="w-full flex-1 overflow-y-auto pr-1 select-none min-h-0 no-scrollbar">
+                             <div className="w-full select-none pr-1">
                                  <div className="grid grid-cols-2 gap-2 mt-1 pb-4">
                                 {TOPICS.map((topic) => (
                                     <button 
