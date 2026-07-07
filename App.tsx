@@ -82,7 +82,14 @@ const App: React.FC = () => {
           />
         </div>
         <div className={`w-full h-full ${activeModule === 'radar' ? 'block' : 'hidden'}`}>
-          <ZendiaRadar isActive={activeModule === 'radar'} />
+          <ZendiaRadar 
+            isActive={activeModule === 'radar'} 
+            onShowQuotaError={(reason, resetTime) => {
+              setQuotaReason(reason);
+              setQuotaResetTime(resetTime);
+              setIsSettingsModalOpen(true);
+            }}
+          />
         </div>
       </main>
 

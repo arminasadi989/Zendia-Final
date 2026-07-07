@@ -5,20 +5,52 @@ import { Activity, AlertTriangle, Lightbulb, TrendingUp, TrendingDown, Minus, Re
 
 interface ZendiaRadarProps {
   isActive?: boolean;
+  onShowQuotaError?: (reason: string, resetTime: string) => void;
 }
 
-export const ZendiaRadar: React.FC<ZendiaRadarProps> = ({ isActive }) => {
+export const ZendiaRadar: React.FC<ZendiaRadarProps> = ({ isActive, onShowQuotaError }) => {
   const [report, setReport] = useState<RadarReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [hasFetched, setHasFetched] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchReport = async () => {
     setLoading(true);
+    setError(null);
     try {
       const data = await generateRadarReport();
       setReport(data);
-    } catch (error) {
-      console.error(error);
+    } catch (err: any) {
+      console.error(err);
+      const nestedError = err?.error || {};
+      const errStr = ((err?.message || err?.toString() || "") + 
+                      " " + 
+                      (nestedError.message || "") +
+                      " " +
+                      (typeof err === 'object' ? JSON.stringify(err) : "")).toLowerCase();
+                      
+      const status = err?.status || err?.statusCode || nestedError.code || nestedError.status || "";
+      
+      const isQuota = 
+        status === 429 ||
+        status === "429" ||
+        status === "RESOURCE_EXHAUSTED" ||
+        errStr.includes("429") ||
+        errStr.includes("quota") ||
+        errStr.includes("limit") ||
+        errStr.includes("exhausted") ||
+        errStr.includes("resource_exhausted") ||
+        errStr.includes("rate limit") ||
+        errStr.includes("capacity") ||
+        errStr.includes("credits");
+
+      if (isQuota && onShowQuotaError) {
+        const reason = `درگاه ارتباطی مدل هوش مصنوعی گوگل جیمینی در حین پردازش "رادار زنده زِندیا" با محدودیت سهمیه (Quota Limit) روبرو شد. دلیل: به خاطر استفاده مشترک همزمان کاربران از کلید پیش‌فرض سرور، محدودیت طرح رایگان عمومی (Free Plan @ 15 RPM) موقتاً به سقف مجاز رسیده است. برای رفع دائمی و عدم مواجهه با این محدودیت، لطفاً کلید اختصاصی API رایگان خود را از پنل Google AI Studio دریافت کرده و در فیلد تنظیمات (کادر بالا) ذخیره نمایید.`;
+        const resetTime = "به طور متوسط ۶۰ ثانیه دیگر (برای محدودیت دقیقه) | ساعت ۰۳:۳۰ بامداد فردا به وقت ایران (۰۰:۰۰ UTC برای محدودیت روزانه)";
+        onShowQuotaError(reason, resetTime);
+      }
+      
+      setError(errStr || "خطای ناشناخته در ارتباط با سرور هوش مصنوعی");
     } finally {
       setLoading(false);
     }
@@ -72,7 +104,7 @@ export const ZendiaRadar: React.FC<ZendiaRadarProps> = ({ isActive }) => {
 
   return (
     <div className="w-full h-full flex flex-col gap-4 overflow-y-auto no-scrollbar pb-20 pt-4 px-4 relative">
-      {loading || (!report && !hasFetched) ? (
+      {loading || (!report && !error && !hasFetched) ? (
         <div className="flex-1 flex flex-col items-center justify-center space-y-4">
           <div className="relative w-24 h-24">
             <div className="absolute inset-0 rounded-full border-t-2 border-primary-500 animate-spin"></div>
@@ -80,6 +112,24 @@ export const ZendiaRadar: React.FC<ZendiaRadarProps> = ({ isActive }) => {
             <Activity className="absolute inset-0 m-auto w-8 h-8 text-primary-400 animate-pulse" />
           </div>
           <p className="text-primary-400 font-bold text-sm animate-pulse tracking-widest">در حال پویش شبکه جهانی...</p>
+        </div>
+      ) : error ? (
+        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-4 max-w-sm mx-auto my-auto animate-in fade-in duration-500">
+          <div className="w-16 h-16 rounded-full bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-500">
+            <AlertTriangle className="w-8 h-8 animate-bounce" />
+          </div>
+          <h3 className="text-sm font-black text-white">خطا در دریافت سیگنال‌های رادار</h3>
+          <p className="text-xs text-slate-400 leading-relaxed text-justify">
+            {error.includes("quota") || error.includes("429") || error.includes("resource_exhausted")
+              ? "محدودیت سهمیه (Quota Limit) ارتباط با مدل هوش مصنوعی گوگل جیمینی رخ داده است. لطفاً تنظیمات هوش مصنوعی خود را بررسی کرده و یا از کلید API اختصاصی استفاده نمایید تا بدون تداخل به برنامه دسترسی داشته باشید."
+              : "برقراری ارتباط با مدل هوش مصنوعی با خطا مواجه شد. لطفاً اتصال اینترنت خود را بررسی کرده و مجدداً تلاش نمایید."}
+          </p>
+          <button 
+            onClick={() => { setError(null); fetchReport(); }} 
+            className="w-full mt-2 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-primary-500/20 text-xs font-bold text-slate-200 hover:text-primary-400 border border-slate-700 hover:border-primary-500/40 transition-all cursor-pointer"
+          >
+            تلاش مجدد برای دریافت گزارش
+          </button>
         </div>
       ) : report ? (
         <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 flex flex-col gap-6">

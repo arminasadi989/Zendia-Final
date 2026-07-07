@@ -384,23 +384,32 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
 
   const checkAndShowQuotaError = (error: any, fallbackContext: string): boolean => {
     if (!error) return false;
-    const errStr = error.message || error.toString() || "";
-    const status = error.status || error.statusCode || "";
+    
+    // Extract nested error structure if it exists
+    const nestedError = error.error || {};
+    const errStr = ((error.message || error.toString() || "") + 
+                    " " + 
+                    (nestedError.message || "") +
+                    " " +
+                    (typeof error === 'object' ? JSON.stringify(error) : "")).toLowerCase();
+                    
+    const status = error.status || error.statusCode || nestedError.code || nestedError.status || "";
     
     const isQuota = 
       status === 429 ||
       status === "429" ||
+      status === "RESOURCE_EXHAUSTED" ||
       errStr.includes("429") ||
-      errStr.toLowerCase().includes("quota") ||
-      errStr.toLowerCase().includes("limit") ||
-      errStr.toLowerCase().includes("exhausted") ||
-      errStr.toLowerCase().includes("resource_exhausted") ||
-      errStr.toLowerCase().includes("rate limit") ||
-      errStr.toLowerCase().includes("capacity") ||
-      errStr.toLowerCase().includes("credits");
+      errStr.includes("quota") ||
+      errStr.includes("limit") ||
+      errStr.includes("exhausted") ||
+      errStr.includes("resource_exhausted") ||
+      errStr.includes("rate limit") ||
+      errStr.includes("capacity") ||
+      errStr.includes("credits");
       
     if (isQuota) {
-      const reason = `درگاه ارتباطی مدل هوش مصنوعی گوگل جیمینی در حین پردازش "${fallbackContext}" با محدودیت استفاده روبرو شد. دلیل: تعداد کل فرکانس‌های ارسالی شما در این دقیقه یا شبانه‌روز از آستانه ظرفیت مجاز طرح رایگان (Free Plan @ 15 RPM / 1500 RPD) فراتر رفته است.`;
+      const reason = `درگاه ارتباطی مدل هوش مصنوعی گوگل جیمینی در حین پردازش "${fallbackContext}" با محدودیت سهمیه (Quota Limit) روبرو شد. دلیل: به خاطر استفاده مشترک همزمان کاربران از کلید پیش‌فرض سرور، محدودیت طرح رایگان عمومی (Free Plan @ 15 RPM) موقتاً به سقف مجاز رسیده است. برای رفع دائمی و عدم مواجهه با این محدودیت، لطفاً کلید اختصاصی API رایگان خود را از پنل Google AI Studio دریافت کرده و در فیلد تنظیمات (کادر بالا) ذخیره نمایید.`;
       const resetTime = "به طور متوسط ۶۰ ثانیه دیگر (برای محدودیت دقیقه) | ساعت ۰۳:۳۰ بامداد فردا به وقت ایران (۰۰:۰۰ UTC برای محدودیت روزانه)";
       onShowQuotaError(reason, resetTime);
       return true;

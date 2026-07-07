@@ -116,7 +116,7 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({
                 type={isKeyVisible ? "text" : "password"}
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder="AIzaSy..."
+                placeholder="AIzaSy... or AQ.dotted.key..."
                 className="w-full bg-slate-950/50 border border-slate-700/50 rounded-xl px-4 py-2.5 text-xs font-mono text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-primary-500/50 focus:ring-1 focus:ring-primary-500/50 transition-all text-left"
                 dir="ltr"
               />
@@ -140,7 +140,7 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({
               </div>
             </div>
             <p className="text-[9px] text-slate-500 leading-relaxed text-justify">
-              این کلید فقط برای همین جلسه (Session) معتبر است و هیچ‌کجا ذخیره نمی‌شود. با رفرش صفحه، کلید پاک شده و سیستم به حالت پیش‌فرض برمی‌گردد.
+              این برنامه به طور کامل از قالب کلیدهای کلاسیک (شروع با AIza) و فرمت نوین نقطه‌دار (شروع با .AQ) پشتیبانی می‌کند. کلید به صورت امن در بک‌اند موقت شما پردازش شده و پس از اتمام جلسه پاک خواهد شد.
             </p>
           </div>
 

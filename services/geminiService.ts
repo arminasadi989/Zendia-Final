@@ -1,5 +1,5 @@
 
-import { GoogleGenAI, Modality } from "@google/genai";
+import { Modality } from "@google/genai";
 import { ChatMessage, AnalysisResult, AnalysisStyle, QAResponse, SourceLink, CredibilityData, RewriteStyle, AVAILABLE_MODELS, AVAILABLE_TTS_MODELS, UsedModelInfo } from "../types";
 
 // --- Dynamic AI Settings ---
@@ -39,14 +39,39 @@ export const getCustomApiKey = () => {
   return customApiKey;
 };
 
-const getAiInstance = () => {
-  const apiKey = customApiKey || process.env.API_KEY;
-  return new GoogleGenAI({ apiKey });
-};
-
 const ai = {
-  get models() {
-    return getAiInstance().models;
+  models: {
+    generateContent: async (params: { model: string; contents: any[]; config?: any }) => {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (customApiKey) {
+        headers["x-api-key"] = customApiKey;
+      }
+      
+      const response = await fetch("/api/gemini/generateContent", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(params),
+      });
+
+      if (!response.ok) {
+        let errData;
+        try {
+          errData = await response.json();
+        } catch {
+          throw new Error(`HTTP Error ${response.status}`);
+        }
+        
+        const apiError: any = new Error(errData?.error?.message || `API Error ${response.status}`);
+        apiError.status = errData?.error?.status || response.status;
+        apiError.statusCode = response.status;
+        apiError.error = errData?.error || {};
+        throw apiError;
+      }
+
+      return await response.json();
+    }
   }
 };
 
