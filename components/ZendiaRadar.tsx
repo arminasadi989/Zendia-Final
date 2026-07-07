@@ -101,7 +101,13 @@ export const ZendiaRadar: React.FC<ZendiaRadarProps> = ({ isActive }) => {
           {/* Briefing Card */}
           <div className="p-4 bg-slate-900/60 backdrop-blur-md rounded-2xl border border-slate-700 shadow-xl relative overflow-hidden">
             <div className="absolute inset-0 bg-gradient-to-r from-primary-500/5 to-purple-500/5 pointer-events-none"></div>
-            <p className="text-sm font-medium text-slate-200 leading-relaxed text-justify relative z-10">
+            {report.usedModel && (
+              <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded-full border border-slate-700 bg-slate-950/80 flex items-center gap-1 text-[7px] font-bold text-slate-400 shadow-lg z-20" title="مدل هوش مصنوعی استفاده شده">
+                <span className="opacity-70">{report.usedModel.modelId.replace('models/', '')}</span>
+                {report.usedModel.thinkingEnabled && <span className="text-purple-400 animate-pulse flex items-center gap-0.5"><svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg> تفکر عمیق</span>}
+              </div>
+            )}
+            <p className="text-sm font-medium text-slate-200 leading-relaxed text-justify relative z-10 pt-2">
               {report.briefing}
             </p>
           </div>

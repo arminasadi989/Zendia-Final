@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { generatePersianSpeech, analyzeNewsFromUrl, askQuestionAboutContent, analyzeNewsFromTopic, analyzeDailyNews, rewriteText, getDetailedSupplementaryNews } from '../services/geminiService';
 import { decode, createWavBlob } from '../utils/audioUtils';
-import { AppStatus, VoiceOption, ChatMessage, AnalysisStyle, SourceLink, CredibilityData, HistoryItem, RewriteStyle } from '../types';
+import { AppStatus, VoiceOption, ChatMessage, AnalysisStyle, SourceLink, CredibilityData, HistoryItem, RewriteStyle, UsedModelInfo } from '../types';
 import { AudioVisualizer } from './AudioVisualizer';
 
 // --- CONSTANTS ---
@@ -277,8 +277,9 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
   const [customTopic, setCustomTopic] = useState<string>('');
   const [sources, setSources] = useState<SourceLink[]>([]);
   const [credibility, setCredibility] = useState<CredibilityData | null>(null);
+  const [usedModel, setUsedModel] = useState<UsedModelInfo | null>(null);
   
-  const [analysisStyle, setAnalysisStyle] = useState<AnalysisStyle>('podcast');
+  const [analysisStyle, setAnalysisStyle] = useState<AnalysisStyle>('quick');
   const [selectedVoice, setSelectedVoice] = useState<string>('Kore');
   const [rewriteStyle, setRewriteStyle] = useState<RewriteStyle>('normal');
   const [openDropdown, setOpenDropdown] = useState<'VOICE' | 'STYLE' | 'TIMEFRAME' | null>(null);
@@ -540,13 +541,13 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
 
   const mainCredVis = getCredibilityVisuals(credibility);
 
-  const saveToHistory = (resultText: string, resultSources: SourceLink[], resultCred: CredibilityData | undefined, resultQs: string[]) => {
+  const saveToHistory = (resultText: string, resultSources: SourceLink[], resultCred: CredibilityData | undefined, resultQs: string[], modelInfo?: UsedModelInfo) => {
       const newItem: HistoryItem = {
           id: Date.now().toString(),
           text: resultText,
           timestamp: Date.now(),
           sourceType: (inputType === 'TOPIC' || inputType === 'DAILY_TOPIC') ? 'topic' : (inputType === 'URL' ? 'url' : 'text'),
-          meta: { url: newsUrl, topicId: selectedTopic, topicLabel: customTopic || TOPICS.find(t => t.id === selectedTopic)?.label, analysisStyle: analysisStyle, sources: resultSources, credibility: resultCred, questions: resultQs, chatMessages: [] }
+          meta: { url: newsUrl, topicId: selectedTopic, topicLabel: customTopic || TOPICS.find(t => t.id === selectedTopic)?.label, analysisStyle: analysisStyle, sources: resultSources, credibility: resultCred, questions: resultQs, chatMessages: [], usedModel: modelInfo }
       };
       setHistory(prev => [newItem, ...prev].slice(0, 50));
   };
@@ -565,6 +566,7 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
       if (item.meta) {
           setSources(item.meta.sources || []);
           setCredibility(item.meta.credibility || null);
+          setUsedModel(item.meta.usedModel || null);
           setSuggestedQuestions(item.meta.questions || []);
           setChatMessages(item.meta.chatMessages || []);
           setAnalysisStyle(item.meta.analysisStyle || 'podcast');
@@ -599,8 +601,8 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
     if (status === AppStatus.PLAYING) { audioRef.current?.pause(); return; }
     try {
       setStatus((inputType === 'URL' || inputType === 'TOPIC' || inputType === 'DAILY_TOPIC' || (inputType === 'TEXT' && rewriteStyle !== 'normal')) ? AppStatus.ANALYZING : AppStatus.GENERATING);
-      setAudioUrl(null); setSources([]); setCredibility(null); setChatMessages([]); setIsPlayerMinimized(false);
-      let resultText = text; let resultQs: string[] = []; let resultSources: SourceLink[] = []; let resultCred: CredibilityData | undefined = undefined;
+      setAudioUrl(null); setSources([]); setCredibility(null); setUsedModel(null); setChatMessages([]); setIsPlayerMinimized(false);
+      let resultText = text; let resultQs: string[] = []; let resultSources: SourceLink[] = []; let resultCred: CredibilityData | undefined = undefined; let resultModel: UsedModelInfo | undefined = undefined;
       if (inputType === 'TOPIC' || inputType === 'DAILY_TOPIC') {
           let result;
           if (inputType === 'DAILY_TOPIC') {
@@ -610,20 +612,20 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
               if (customTopic && customTopic.trim().length > 0) result = await analyzeNewsFromTopic('custom_search', customTopic, analysisStyle);
               else { const topic = TOPICS.find(t => t.id === selectedTopic); if (!topic) return; result = await analyzeNewsFromTopic(topic.id, topic.label, analysisStyle); }
           }
-          setText(result.text); setSuggestedQuestions(result.questions); setSources(result.sources); if (result.credibility) setCredibility(result.credibility);
-          resultText = result.text; resultQs = result.questions; resultSources = result.sources; resultCred = result.credibility;
+          setText(result.text); setSuggestedQuestions(result.questions); setSources(result.sources); if (result.credibility) setCredibility(result.credibility); if (result.usedModel) setUsedModel(result.usedModel);
+          resultText = result.text; resultQs = result.questions; resultSources = result.sources; resultCred = result.credibility; resultModel = result.usedModel;
       } else if (inputType === 'URL') {
         if (!newsUrl) return;
         const result = await analyzeNewsFromUrl(newsUrl, analysisStyle);
-        setText(result.text); setSuggestedQuestions(result.questions); setSources(result.sources); if (result.credibility) setCredibility(result.credibility);
-        resultText = result.text; resultQs = result.questions; resultSources = result.sources; resultCred = result.credibility;
+        setText(result.text); setSuggestedQuestions(result.questions); setSources(result.sources); if (result.credibility) setCredibility(result.credibility); if (result.usedModel) setUsedModel(result.usedModel);
+        resultText = result.text; resultQs = result.questions; resultSources = result.sources; resultCred = result.credibility; resultModel = result.usedModel;
       } else if (inputType === 'TEXT' && rewriteStyle !== 'normal') {
           if (!text.trim()) return;
           const rewritten = await rewriteText(text, rewriteStyle);
           setText(rewritten); resultText = rewritten;
       }
       if (!resultText) return;
-      saveToHistory(resultText, resultSources, resultCred, resultQs);
+      saveToHistory(resultText, resultSources, resultCred, resultQs, resultModel);
       setNewsUrl(''); setCustomTopic(''); setViewMode('CHAT'); setStatus(AppStatus.IDLE);
     } catch (err) { 
       console.error(err); 
@@ -797,7 +799,7 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
     updateHistoryChat(newChatState);
     try {
       const result = await askQuestionAboutContent(text, msgText, newChatState);
-      const modelMsg: ChatMessage = { id: (Date.now() + 1).toString(), role: 'model', text: result.answer, timestamp: Date.now(), sources: result.sources, credibility: result.credibility };
+      const modelMsg: ChatMessage = { id: (Date.now() + 1).toString(), role: 'model', text: result.answer, timestamp: Date.now(), sources: result.sources, credibility: result.credibility, usedModel: result.usedModel };
       const updatedChatWithModel = [...newChatState, modelMsg];
       setChatMessages(updatedChatWithModel); setSuggestedQuestions(result.nextQuestions);
       updateHistoryChat(updatedChatWithModel);
@@ -997,7 +999,7 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
                      <button 
                        onClick={handleMainAction} 
                        disabled={isProcessing || (inputType === 'TEXT' && !text) || (inputType === 'URL' && !newsUrl) || ((inputType === 'TOPIC' || inputType === 'DAILY_TOPIC') && !selectedTopic && !customTopic)} 
-                       className={`relative flex-none w-[72px] h-[72px] md:w-[88px] md:h-[88px] rounded-full flex items-center justify-center transition-all duration-500 ${isProcessing ? 'scale-[1.05] shadow-[0_0_40px_rgba(34,211,238,0.4)] ring-2 ring-cyan-400' : 'shadow-[0_0_20px_rgba(34,211,238,0.2)] hover:scale-105 active:scale-95 hover:shadow-[0_0_30px_rgba(34,211,238,0.4)]'} bg-slate-900 border border-primary-500/40 group disabled:opacity-50 disabled:scale-100 disabled:shadow-none -mt-4 mb-2.5 mx-auto`}
+                       className={`relative flex-none w-[72px] h-[72px] md:w-[88px] md:h-[88px] rounded-full flex items-center justify-center transition-all duration-500 ${isProcessing ? 'scale-[1.05] shadow-[0_0_40px_rgba(34,211,238,0.4)] ring-2 ring-cyan-400' : 'shadow-[0_0_20px_rgba(34,211,238,0.2)] hover:scale-105 active:scale-95 hover:shadow-[0_0_30px_rgba(34,211,238,0.4)]'} bg-slate-900 border border-primary-500/40 group disabled:opacity-50 disabled:scale-100 disabled:shadow-none mt-6 md:mt-8 mb-4 mx-auto`}
                        title={isProcessing ? 'در حال پردازش...' : 'اجرا (Z)'}
                      >
                         <div className="flex items-center justify-center">
@@ -1027,7 +1029,15 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
                 <div ref={scrollContainerRef} className="flex-1 overflow-y-auto no-scrollbar space-y-4 py-2 pb-4">
                     <div className={`bg-slate-900/40 border rounded-2xl p-4 pb-12 relative group transition-colors duration-500 ${mainCredVis.border} ${mainCredVis.shadow}`}>
                         <button onClick={handleBackToInput} className="absolute -top-2 left-4 px-2 py-0.5 rounded-full border border-slate-700 bg-slate-950 text-slate-400 hover:text-white hover:border-primary-500/50 hover:shadow-[0_0_8px_rgba(34,211,238,0.2)] transition-all flex items-center gap-1 text-[9px] font-bold shadow-lg z-10"><svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg><span>بازگشت</span></button>
-                        {credibility && <div className={`absolute -top-2 right-4 px-2 py-0.5 rounded-full border bg-slate-950 ${mainCredVis.color} ${mainCredVis.border} flex items-center gap-1.5 text-[9px] font-bold shadow-lg`}><span className="text-xs leading-none">{mainCredVis.icon}</span><span>{credibility.label}</span></div>}
+                        <div className="absolute -top-2 right-4 flex items-center gap-2 z-10">
+                            {credibility && <div className={`px-2 py-0.5 rounded-full border bg-slate-950 ${mainCredVis.color} ${mainCredVis.border} flex items-center gap-1.5 text-[9px] font-bold shadow-lg`}><span className="text-xs leading-none">{mainCredVis.icon}</span><span>{credibility.label}</span></div>}
+                            {usedModel && (
+                                <div className="px-2 py-0.5 rounded-full border border-slate-700 bg-slate-950 flex items-center gap-1 text-[8px] font-bold text-slate-400 shadow-lg" title="مدل هوش مصنوعی استفاده شده">
+                                    <span>{usedModel.modelId.replace('models/', '')}</span>
+                                    {usedModel.thinkingEnabled && <span className="text-purple-400 animate-pulse flex items-center gap-0.5"><svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg> تفکر عمیق</span>}
+                                </div>
+                            )}
+                        </div>
                         {(() => {
                           const paragraphs = parseNewsItems(text);
                           if (paragraphs.length === 0) {
@@ -1061,7 +1071,17 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
                     {chatMessages.map(msg => { const msgCredVis = getCredibilityVisuals(msg.credibility); return (
                              <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                                  <div className={`relative max-w-[90%] rounded-2xl px-3 py-2 text-xs shadow-sm ${msg.role === 'user' ? 'bg-primary-900/30 text-white border border-primary-500/20' : `bg-slate-900/60 text-slate-300 border ${msgCredVis.border || 'border-slate-700'}`}`}>
-                                     {msg.role === 'model' && msg.credibility && <div className={`absolute -top-1.5 -right-1 px-1.5 py-0.5 rounded-full border bg-slate-950/80 ${msgCredVis.color} ${msgCredVis.border} flex items-center gap-1 text-[8px] font-bold`}><span>{msgCredVis.icon}</span></div>}
+                                     {msg.role === 'model' && (
+                                         <div className="absolute -top-1.5 -right-1 flex flex-row-reverse items-center gap-1">
+                                             {msg.credibility && <div className={`px-1.5 py-0.5 rounded-full border bg-slate-950/80 ${msgCredVis.color} ${msgCredVis.border} flex items-center gap-1 text-[8px] font-bold`}><span>{msgCredVis.icon}</span></div>}
+                                             {msg.usedModel && (
+                                                 <div className="px-1.5 py-0.5 rounded-full border border-slate-700 bg-slate-950/80 flex items-center gap-1 text-[7px] text-slate-400 font-bold" title="مدل هوش مصنوعی استفاده شده">
+                                                    <span>{msg.usedModel.modelId.replace('models/', '')}</span>
+                                                    {msg.usedModel.thinkingEnabled && <span className="text-purple-400 animate-pulse flex items-center gap-0.5"><svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg> تفکر</span>}
+                                                 </div>
+                                             )}
+                                         </div>
+                                     )}
                                      <p className={msg.role === 'model' ? 'pb-1.5 leading-5' : ''}>{msg.text}</p>
                                      {msg.role === 'model' && msg.sources && msg.sources.length > 0 && <div className="mt-1 pt-1 border-t border-white/5 flex flex-wrap gap-1 pb-3">{msg.sources.map((src, idx) => <a key={idx} href={src.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 px-1 py-0.5 bg-black/20 hover:bg-black/40 rounded text-[8px] text-slate-400 hover:text-primary-300 transition-colors"><span className="w-1 h-1 rounded-full bg-slate-500"></span><span className="max-w-[70px] truncate">{src.title || new URL(src.url).hostname}</span></a>)}</div>}
                                      {msg.role === 'model' && <div className="absolute bottom-1.5 left-2"><button onClick={() => handlePlayText(msg.text, msg.id)} disabled={generatingId !== null} className="w-5 h-5 rounded-full bg-slate-700/50 hover:bg-primary-500 text-slate-400 hover:text-white flex items-center justify-center transition-all">{generatingId === msg.id ? <span className="block w-1 h-1 bg-current rounded-full animate-bounce"></span> : <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>}</button></div>}

@@ -1,9 +1,35 @@
 
 import { GoogleGenAI, Modality } from "@google/genai";
-import { ChatMessage, AnalysisResult, AnalysisStyle, QAResponse, SourceLink, CredibilityData, RewriteStyle } from "../types";
+import { ChatMessage, AnalysisResult, AnalysisStyle, QAResponse, SourceLink, CredibilityData, RewriteStyle, AVAILABLE_MODELS, AVAILABLE_TTS_MODELS, UsedModelInfo } from "../types";
 
-// Dynamic API Key Support
+// --- Dynamic AI Settings ---
 let customApiKey: string | null = null;
+let selectedTextModel: string = 'gemini-3.5-flash';
+let selectedTtsModel: string = 'gemini-2.5-flash';
+let isThinkingEnabled: boolean = false;
+
+export const setAiSettings = (apiKey: string | null, model: string, thinking: boolean, ttsModel: string = 'gemini-2.5-flash') => {
+  customApiKey = apiKey;
+  const validModel = AVAILABLE_MODELS.find(m => m.id === model);
+  if (validModel) {
+    selectedTextModel = validModel.id;
+    isThinkingEnabled = validModel.supportsThinking ? thinking : false;
+  } else {
+    selectedTextModel = 'gemini-3.5-flash';
+    isThinkingEnabled = false;
+  }
+  
+  const validTtsModel = AVAILABLE_TTS_MODELS.find(m => m.id === ttsModel);
+  if (validTtsModel) {
+    selectedTtsModel = validTtsModel.id;
+  } else {
+    selectedTtsModel = 'gemini-2.5-flash';
+  }
+};
+
+export const getAiSettings = () => {
+  return { customApiKey, textModel: selectedTextModel, enableThinking: isThinkingEnabled, ttsModel: selectedTtsModel };
+};
 
 export const setCustomApiKey = (key: string | null) => {
   customApiKey = key;
@@ -24,14 +50,53 @@ const ai = {
   }
 };
 
-// Models
-const TEXT_MODEL = 'gemini-3.1-flash-lite';
-const TTS_MODEL = 'gemini-2.5-flash';
+// --- Models ---
+const getTextModelConfig = () => {
+  const config: any = {
+    systemInstruction: "You are a helpful AI.", // Default, will be overridden
+    temperature: 0.7,
+  };
+  
+  if (isThinkingEnabled) {
+    config.thinkingConfig = { thinkingBudget: 1024 };
+  }
+  
+  return {
+    model: selectedTextModel,
+    config,
+    usedModelInfo: { modelId: selectedTextModel, thinkingEnabled: isThinkingEnabled } as UsedModelInfo
+  };
+};
+
+/**
+ * Conservative retry logic to avoid quota exhaustion.
+ * Adds delays and backs off exponentially if 429 occurs.
+ */
+const executeWithRetry = async <T>(operation: () => Promise<T>, maxRetries = 2): Promise<T> => {
+  let attempt = 0;
+  while (attempt <= maxRetries) {
+    try {
+      if (attempt > 0) {
+        await new Promise(resolve => setTimeout(resolve, attempt * 2000));
+      }
+      return await operation();
+    } catch (error: any) {
+      const isQuotaError = error?.status === 429 || error?.message?.includes('429') || error?.message?.includes('quota');
+      if (isQuotaError && attempt < maxRetries) {
+        console.warn(`Quota limit reached. Retrying... (Attempt ${attempt + 1}/${maxRetries})`);
+        attempt++;
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error("Maximum retries reached.");
+};
 
 export const generatePersianSpeech = async (text: string, voiceName: string = 'Kore'): Promise<string> => {
   try {
-    const response = await ai.models.generateContent({
-      model: TTS_MODEL,
+    const response = await executeWithRetry(() => ai.models.generateContent({
+      model: selectedTtsModel,
       contents: [{ parts: [{ text: text }] }],
       config: {
         responseModalities: [Modality.AUDIO],
@@ -41,7 +106,7 @@ export const generatePersianSpeech = async (text: string, voiceName: string = 'K
           },
         },
       },
-    });
+    }));
 
     const candidate = response.candidates?.[0];
     const audioPart = candidate?.content?.parts?.[0];
@@ -81,10 +146,12 @@ export const rewriteText = async (text: string, style: RewriteStyle): Promise<st
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: TEXT_MODEL,
-      contents: [{ parts: [{ text: prompt }] }]
-    });
+    const { model, config } = getTextModelConfig();
+    const response = await executeWithRetry(() => ai.models.generateContent({
+      model: model,
+      contents: [{ parts: [{ text: prompt }] }],
+      config
+    }));
     
     let rewritten = response.candidates?.[0]?.content?.parts?.[0]?.text;
     return rewritten?.trim() || text;
@@ -251,14 +318,18 @@ export const analyzeNewsFromTopic = async (topicId: string, topicLabel: string, 
     `;
 
     try {
-        const response = await ai.models.generateContent({
-            model: TEXT_MODEL,
+        const { model, config, usedModelInfo } = getTextModelConfig();
+        const response = await executeWithRetry(() => ai.models.generateContent({
+            model: model,
             contents: [{ parts: [{ text: prompt }] }],
             config: {
+                ...config,
                 tools: [{ googleSearch: {} }],
             },
-        });
-        return processAnalysisResponse(response);
+        }));
+        const result = processAnalysisResponse(response);
+        result.usedModel = usedModelInfo;
+        return result;
     } catch (error) {
         console.error("Error analyzing topic:", error);
         throw error;
@@ -323,14 +394,18 @@ export const analyzeDailyNews = async (topicId: string, topicLabel: string, styl
     `;
 
     try {
-        const response = await ai.models.generateContent({
-            model: TEXT_MODEL,
+        const { model, config, usedModelInfo } = getTextModelConfig();
+        const response = await executeWithRetry(() => ai.models.generateContent({
+            model: model,
             contents: [{ parts: [{ text: prompt }] }],
             config: {
+                ...config,
                 tools: [{ googleSearch: {} }],
             },
-        });
-        return processAnalysisResponse(response);
+        }));
+        const result = processAnalysisResponse(response);
+        result.usedModel = usedModelInfo;
+        return result;
     } catch (error) {
         console.error("Error analyzing daily topic:", error);
         throw error;
@@ -356,23 +431,31 @@ export const analyzeNewsFromUrl = async (url: string, style: AnalysisStyle): Pro
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: TEXT_MODEL,
+    const { model, config, usedModelInfo } = getTextModelConfig();
+    const response = await executeWithRetry(() => ai.models.generateContent({
+      model: model,
       contents: [{ parts: [{ text: prompt }] }],
       config: {
+        ...config,
         tools: [{ googleSearch: {} }],
       },
-    });
-    return processAnalysisResponse(response);
+    }));
+    const result = processAnalysisResponse(response);
+    result.usedModel = usedModelInfo;
+    return result;
   } catch (error: any) {
     if (error.status === 403 || error.toString().includes("403") || error.toString().includes("PERMISSION_DENIED")) {
         console.warn("Google Search permission denied (403). Falling back.");
         const fallbackPrompt = prompt + "\n\n(توجه: دسترسی به جستجو مقدور نیست. بر اساس متن و دامنه URL تحلیل کن.)";
-        const response = await ai.models.generateContent({
-            model: TEXT_MODEL,
-            contents: [{ parts: [{ text: fallbackPrompt }] }]
-        });
-        return processAnalysisResponse(response);
+        const { model, config, usedModelInfo } = getTextModelConfig();
+        const response = await executeWithRetry(() => ai.models.generateContent({
+            model: model,
+            contents: [{ parts: [{ text: fallbackPrompt }] }],
+            config
+        }));
+        const result = processAnalysisResponse(response);
+        result.usedModel = usedModelInfo;
+        return result;
     }
     console.error("Error analyzing news:", error);
     throw error;
@@ -536,21 +619,28 @@ export const askQuestionAboutContent = async (
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: TEXT_MODEL,
+    const { model, config, usedModelInfo } = getTextModelConfig();
+    const response = await executeWithRetry(() => ai.models.generateContent({
+      model: model,
       contents: [{ parts: [{ text: prompt }] }],
-      config: { tools: [{ googleSearch: {} }] },
-    });
-    return processQAResponse(response);
+      config: { ...config, tools: [{ googleSearch: {} }] },
+    }));
+    const result = processQAResponse(response);
+    result.usedModel = usedModelInfo;
+    return result;
   } catch (error: any) {
      if (error.status === 403 || error.toString().includes("403") || error.toString().includes("PERMISSION_DENIED")) {
         console.warn("Q&A Search 403. Fallback.");
         const fallbackPrompt = prompt + "\n(جستجو در دسترس نیست، تخمینی پاسخ بده)";
-        const response = await ai.models.generateContent({
-            model: TEXT_MODEL,
-            contents: [{ parts: [{ text: fallbackPrompt }] }]
-        });
-        return processQAResponse(response);
+        const { model, config, usedModelInfo } = getTextModelConfig();
+        const response = await executeWithRetry(() => ai.models.generateContent({
+            model: model,
+            contents: [{ parts: [{ text: fallbackPrompt }] }],
+            config
+        }));
+        const result = processQAResponse(response);
+        result.usedModel = usedModelInfo;
+        return result;
      }
      throw error;
   }
@@ -641,6 +731,7 @@ export interface RadarReport {
   threats: string[];
   opportunities: string[];
   briefing: string;
+  usedModel?: UsedModelInfo;
 }
 
 export const generateRadarReport = async (): Promise<RadarReport> => {
@@ -665,11 +756,12 @@ export const generateRadarReport = async (): Promise<RadarReport> => {
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: TEXT_MODEL,
+    const { model, config, usedModelInfo } = getTextModelConfig();
+    const response = await executeWithRetry(() => ai.models.generateContent({
+      model: model,
       contents: [{ parts: [{ text: prompt }] }],
-      config: { tools: [{ googleSearch: {} }] },
-    });
+      config: { ...config, tools: [{ googleSearch: {} }] },
+    }));
     
     let text = response.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error("No response received.");
@@ -679,7 +771,9 @@ export const generateRadarReport = async (): Promise<RadarReport> => {
     const jsonEnd = text.lastIndexOf('}');
     if (jsonStart !== -1 && jsonEnd !== -1) text = text.substring(jsonStart, jsonEnd + 1);
 
-    return JSON.parse(text) as RadarReport;
+    const reportData = JSON.parse(text) as RadarReport;
+    reportData.usedModel = usedModelInfo;
+    return reportData;
   } catch (error: any) {
     console.error("Radar generation error:", error);
     return {
@@ -721,13 +815,15 @@ export const getDetailedSupplementaryNews = async (newsText: string): Promise<Su
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: TEXT_MODEL,
+    const { model, config } = getTextModelConfig();
+    const response = await executeWithRetry(() => ai.models.generateContent({
+      model: model,
       contents: [{ parts: [{ text: prompt }] }],
       config: {
+        ...config,
         tools: [{ googleSearch: {} }],
       },
-    });
+    }));
 
     let textResponse = response.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!textResponse) throw new Error("پاسخی از مدل دریافت نشد.");
@@ -802,10 +898,12 @@ export const getDetailedSupplementaryNews = async (newsText: string): Promise<Su
     console.error("Error in getDetailedSupplementaryNews:", error);
     // If permission or search denied, fallback
     if (error.status === 403 || error.toString().includes("403") || error.toString().includes("PERMISSION_DENIED")) {
-        const responseFallback = await ai.models.generateContent({
-            model: TEXT_MODEL,
-            contents: [{ parts: [{ text: prompt + "\n(توجه: جستجوی گوگل قطع است، پاسخ تفصیلی به این خبر بنویسید)" }] }]
-        });
+        const { model, config } = getTextModelConfig();
+        const responseFallback = await executeWithRetry(() => ai.models.generateContent({
+            model: model,
+            contents: [{ parts: [{ text: prompt + "\n(توجه: جستجوی گوگل قطع است، پاسخ تفصیلی به این خبر بنویسید)" }] }],
+            config
+        }));
         let textR = responseFallback.candidates?.[0]?.content?.parts?.[0]?.text || "";
         textR = textR.trim();
         textR = textR.replace(/^```json\s*/i, '').replace(/\s*```$/, '');

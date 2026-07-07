@@ -6,11 +6,12 @@ interface HeaderProps {
   appStatus: AppStatus;
   onOpenGuide: () => void;
   onToggleHistory: () => void;
-  onOpenQuotaModal: () => void;
+  onOpenSettings: () => void;
   isCustomKeyActive: boolean;
+  settingsCheckTrigger?: number;
 }
 
-export const Header: React.FC<HeaderProps> = ({ appStatus, onOpenGuide, onToggleHistory, onOpenQuotaModal, isCustomKeyActive }) => {
+export const Header: React.FC<HeaderProps> = ({ appStatus, onOpenGuide, onToggleHistory, onOpenSettings, isCustomKeyActive, settingsCheckTrigger }) => {
   // Generate deterministic heights and delays for the stable bars using useMemo
   const bars = React.useMemo(() => {
     return Array.from({ length: 40 }, (_, i) => {
@@ -153,16 +154,18 @@ export const Header: React.FC<HeaderProps> = ({ appStatus, onOpenGuide, onToggle
         {/* RIGHT HUD (Physical Right) */}
         <div className="absolute top-1/2 -translate-y-1/2 right-5 md:right-6 flex flex-col gap-0.5 select-none items-end transition-all duration-300" dir="ltr">
            
-           {/* Clickable API Quota Widget */}
+           {/* Clickable AI Settings Widget */}
            <button 
-             onClick={onOpenQuotaModal}
-             className="group flex items-center gap-1.5 px-2 py-0.5 mb-1.5 mr-0.5 rounded bg-slate-800/60 border border-slate-700/60 hover:border-cyan-400 hover:bg-cyan-500/10 transition-all select-none cursor-pointer"
-             title="بررسی وضعیت سهمیه و افزودن کلید هوش مصنوعی اختصاصی"
+             onClick={onOpenSettings}
+             className="group flex flex-col items-end gap-0.5 px-2 py-1 mb-1.5 mr-0.5 rounded bg-slate-800/60 border border-slate-700/60 hover:border-cyan-400 hover:bg-cyan-500/10 transition-all select-none cursor-pointer"
+             title="تنظیمات موتور هوش مصنوعی"
            >
-             <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${isCustomKeyActive ? 'bg-cyan-400 shadow-[0_0_8px_#22d3ee]' : 'bg-emerald-400 shadow-[0_0_8px_#34d399]'}`}></span>
-             <span className="text-[7.5px] font-black text-slate-400 group-hover:text-cyan-300 transition-colors uppercase font-sans tracking-wide">
-               {isCustomKeyActive ? 'API: CUSTOM' : 'API: FREE'}
-             </span>
+             <div className="flex items-center gap-1.5">
+               <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${isCustomKeyActive ? 'bg-cyan-400 shadow-[0_0_8px_#22d3ee]' : 'bg-emerald-400 shadow-[0_0_8px_#34d399]'}`}></span>
+               <span className="text-[7.5px] font-black text-slate-400 group-hover:text-cyan-300 transition-colors uppercase font-sans tracking-wide">
+                 {isCustomKeyActive ? 'API: CUSTOM' : 'API: FREE'}
+               </span>
+             </div>
            </button>
 
            {/* Top bracket */}
