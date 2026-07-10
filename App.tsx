@@ -34,6 +34,35 @@ const App: React.FC = () => {
     setShowHistory(prev => !prev);
   };
 
+  // Eruda click outside listener
+  React.useEffect(() => {
+    const handleGlobalClick = (event: MouseEvent) => {
+      const erudaInstance = (window as any).eruda;
+      if (erudaInstance) {
+        const erudaContainer = document.getElementById('eruda');
+        const toggleButton = document.getElementById('eruda-toggle-btn');
+        
+        if (erudaContainer && toggleButton) {
+          const isClickOnToggle = toggleButton.contains(event.target as Node) || event.target === toggleButton;
+          const isClickInsideEruda = erudaContainer.contains(event.target as Node) || event.target === erudaContainer;
+          
+          if (!isClickOnToggle && !isClickInsideEruda) {
+            try {
+              erudaInstance.hide();
+            } catch (err) {
+              console.error(err);
+            }
+          }
+        }
+      }
+    };
+
+    document.addEventListener('click', handleGlobalClick, true);
+    return () => {
+      document.removeEventListener('click', handleGlobalClick, true);
+    };
+  }, []);
+
   return (
     <div className="h-full flex flex-col font-sans text-slate-200 relative overflow-hidden bg-slate-950" dir="rtl">
       {/* Background decoration: Sharp Audio Spectrum Pattern */}
@@ -46,7 +75,7 @@ const App: React.FC = () => {
            <div className="absolute top-1/4 left-10 w-1 h-20 bg-primary-500/10 rounded-full"></div>
            <div className="absolute top-1/3 right-20 w-1 h-32 bg-primary-500/10 rounded-full"></div>
            <div className="absolute bottom-20 left-1/3 w-1 h-16 bg-primary-500/10 rounded-full"></div>
-      </div>
+       </div>
       
       {/* Radial Gradient for depth */}
       <div className="absolute inset-0 z-0 pointer-events-none bg-[radial-gradient(circle_at_50%_0%,rgba(34,211,238,0.1),transparent_80%)]"></div>
@@ -95,7 +124,7 @@ const App: React.FC = () => {
 
       {/* Bottom Navigation */}
       {!(activeModule === 'analyzer' && analyzerViewMode === 'CHAT') && (
-        <div className="w-full max-w-lg mx-auto fixed bottom-0 left-1/2 -translate-x-1/2 z-50 p-1.5 sm:p-3">
+        <div className="w-full max-w-lg mx-auto fixed bottom-0 left-1/2 -translate-x-1/2 z-50 px-6 pb-2 sm:px-8 sm:pb-4">
           <div className="bg-slate-900/80 backdrop-blur-xl border border-slate-700/50 rounded-2xl flex p-1 shadow-2xl relative overflow-hidden">
             {/* Active indicator background */}
             <div 

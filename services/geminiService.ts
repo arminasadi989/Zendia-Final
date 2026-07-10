@@ -1,34 +1,75 @@
 
-import { Modality } from "@google/genai";
+import { GoogleGenAI, Modality } from "@google/genai";
 import { ChatMessage, AnalysisResult, AnalysisStyle, QAResponse, SourceLink, CredibilityData, RewriteStyle, AVAILABLE_MODELS, AVAILABLE_TTS_MODELS, UsedModelInfo } from "../types";
 
 // --- Dynamic AI Settings ---
 let customApiKey: string | null = null;
 let selectedTextModel: string = 'gemini-3.5-flash';
-let selectedTtsModel: string = 'gemini-2.5-flash';
-let isThinkingEnabled: boolean = false;
+let selectedTtsModel: string = 'gemini-3.1-flash-tts-preview';
+let thinkingLevel: 'low' | 'normal' | 'high' = 'low';
 
-export const setAiSettings = (apiKey: string | null, model: string, thinking: boolean, ttsModel: string = 'gemini-2.5-flash') => {
+const VALID_MODEL_ORDER = [
+  'gemini-3.5-flash',
+  'gemini-3.0-flash',
+  'gemini-3.1-flash-lite',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite'
+];
+
+const VALID_TTS_MODEL_ORDER = [
+  'gemini-3.1-flash-tts-preview',
+  'gemini-2.5-flash'
+];
+
+export const getValidModelId = (model: string): string => {
+  if (VALID_MODEL_ORDER.includes(model)) {
+    return model;
+  }
+  return 'gemini-3.5-flash';
+};
+
+export const getValidTtsModelId = (model: string): string => {
+  if (VALID_TTS_MODEL_ORDER.includes(model)) {
+    return model;
+  }
+  return 'gemini-3.1-flash-tts-preview';
+};
+
+export const setAiSettings = (
+  apiKey: string | null, 
+  model: string, 
+  thinking: boolean | 'low' | 'normal' | 'high', 
+  ttsModel: string = 'gemini-3.1-flash-tts-preview'
+) => {
   customApiKey = apiKey;
-  const validModel = AVAILABLE_MODELS.find(m => m.id === model);
-  if (validModel) {
-    selectedTextModel = validModel.id;
-    isThinkingEnabled = validModel.supportsThinking ? thinking : false;
+  selectedTextModel = getValidModelId(model);
+  
+  const modelInfo = AVAILABLE_MODELS.find(m => m.id === selectedTextModel);
+  const supportsThinking = modelInfo?.supportsThinking ?? false;
+  
+  if (supportsThinking) {
+    if (typeof thinking === 'boolean') {
+      thinkingLevel = thinking ? 'normal' : 'low';
+    } else if (thinking === 'low' || thinking === 'normal' || thinking === 'high') {
+      thinkingLevel = thinking;
+    } else {
+      thinkingLevel = 'low';
+    }
   } else {
-    selectedTextModel = 'gemini-3.5-flash';
-    isThinkingEnabled = false;
+    thinkingLevel = 'low';
   }
   
-  const validTtsModel = AVAILABLE_TTS_MODELS.find(m => m.id === ttsModel);
-  if (validTtsModel) {
-    selectedTtsModel = validTtsModel.id;
-  } else {
-    selectedTtsModel = 'gemini-2.5-flash';
-  }
+  selectedTtsModel = getValidTtsModelId(ttsModel);
 };
 
 export const getAiSettings = () => {
-  return { customApiKey, textModel: selectedTextModel, enableThinking: isThinkingEnabled, ttsModel: selectedTtsModel };
+  return { 
+    customApiKey, 
+    textModel: selectedTextModel, 
+    enableThinking: thinkingLevel !== 'low', 
+    thinkingLevel, 
+    ttsModel: selectedTtsModel 
+  };
 };
 
 export const setCustomApiKey = (key: string | null) => {
@@ -39,57 +80,48 @@ export const getCustomApiKey = () => {
   return customApiKey;
 };
 
+const getAiInstance = () => {
+  const apiKey = customApiKey || process.env.API_KEY;
+  return new GoogleGenAI({ apiKey });
+};
+
 const ai = {
-  models: {
-    generateContent: async (params: { model: string; contents: any[]; config?: any }) => {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      if (customApiKey) {
-        headers["x-api-key"] = customApiKey;
-      }
-      
-      const response = await fetch("/api/gemini/generateContent", {
-        method: "POST",
-        headers,
-        body: JSON.stringify(params),
-      });
-
-      if (!response.ok) {
-        let errData;
-        try {
-          errData = await response.json();
-        } catch {
-          throw new Error(`HTTP Error ${response.status}`);
-        }
-        
-        const apiError: any = new Error(errData?.error?.message || `API Error ${response.status}`);
-        apiError.status = errData?.error?.status || response.status;
-        apiError.statusCode = response.status;
-        apiError.error = errData?.error || {};
-        throw apiError;
-      }
-
-      return await response.json();
-    }
+  get models() {
+    return getAiInstance().models;
   }
 };
 
 // --- Models ---
 const getTextModelConfig = () => {
+  const modelId = getValidModelId(selectedTextModel);
+  const modelInfo = AVAILABLE_MODELS.find(m => m.id === modelId);
+  const supportsThinking = modelInfo?.supportsThinking ?? false;
+  
   const config: any = {
     systemInstruction: "You are a helpful AI.", // Default, will be overridden
     temperature: 0.7,
   };
   
-  if (isThinkingEnabled) {
-    config.thinkingConfig = { thinkingBudget: 1024 };
+  if (supportsThinking && thinkingLevel !== 'low') {
+    if (modelId.startsWith('gemini-3.')) {
+      config.thinkingConfig = {
+        thinkingLevel: thinkingLevel === 'high' ? 'HIGH' : 'LOW'
+      };
+    } else {
+      config.thinkingConfig = {
+        thinkingBudget: thinkingLevel === 'high' ? 2048 : 1024
+      };
+    }
   }
   
   return {
-    model: selectedTextModel,
+    model: modelId,
     config,
-    usedModelInfo: { modelId: selectedTextModel, thinkingEnabled: isThinkingEnabled } as UsedModelInfo
+    usedModelInfo: { 
+      modelId, 
+      thinkingEnabled: thinkingLevel !== 'low',
+      thinkingLevel
+    } as UsedModelInfo
   };
 };
 

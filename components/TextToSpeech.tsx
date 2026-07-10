@@ -308,6 +308,23 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [usingSpeechSynthesis, setUsingSpeechSynthesis] = useState<boolean>(false);
   const textToPlayActive = useRef<string>('');
+
+  // Streaming Audio Queue States & Refs
+  interface AudioChunk {
+    index: number;
+    text: string;
+    url: string | null;
+    duration: number;
+    status: 'pending' | 'fetching' | 'ready' | 'failed';
+    blob: Blob | null;
+  }
+  const [chunks, setChunks] = useState<AudioChunk[]>([]);
+  const chunksRef = useRef<AudioChunk[]>([]);
+  const currentChunkIndexRef = useRef<number>(0);
+  const currentTimeOffsetRef = useRef<number>(0);
+  const isWaitingForNextChunkRef = useRef<boolean>(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const [audioErrorText, setAudioErrorText] = useState<string | null>(null);
   const originalSpeechUtterance = useRef<SpeechSynthesisUtterance | null>(null);
   const speechTimer = useRef<NodeJS.Timeout | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -487,14 +504,279 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
       localStorage.setItem('zendia_history', JSON.stringify(history));
   }, [history]);
 
+  // --- AUXILIARY STREAMING FUNCTIONS ---
+  const splitTextIntoSentences = (inputText: string): string[] => {
+    const normalized = inputText.trim();
+    if (!normalized) return [];
+    // Split on Persian & standard sentence endings, ignoring decimals
+    const parts = normalized.split(/([.!؟?\n]+)/);
+    const sentences: string[] = [];
+    let currentSentence = "";
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (!part) continue;
+      if (/^[.!؟?\n]+$/.test(part)) {
+        currentSentence += part;
+        if (currentSentence.trim().length > 0) {
+          sentences.push(currentSentence.trim());
+        }
+        currentSentence = "";
+      } else {
+        currentSentence += part;
+      }
+    }
+    if (currentSentence.trim().length > 0) {
+      sentences.push(currentSentence.trim());
+    }
+    const mergedSentences: string[] = [];
+    let buffer = "";
+    for (const sentence of sentences) {
+      if (buffer) {
+        buffer += " " + sentence;
+      } else {
+        buffer = sentence;
+      }
+      if (buffer.length >= 35 || buffer.includes('\n')) {
+        mergedSentences.push(buffer.trim());
+        buffer = "";
+      }
+    }
+    if (buffer.trim()) {
+      mergedSentences.push(buffer.trim());
+    }
+    return mergedSentences.filter(s => s.length > 0);
+  };
+
+  const writeString = (view: DataView, offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+
+  const mergeWavBlobs = async (blobs: Blob[]): Promise<Blob> => {
+    if (blobs.length === 0) return new Blob();
+    if (blobs.length === 1) return blobs[0];
+    
+    const arrayBuffers = await Promise.all(blobs.map(b => b.arrayBuffer()));
+    let totalPcmSize = 0;
+    for (const buffer of arrayBuffers) {
+      if (buffer.byteLength > 44) {
+        totalPcmSize += (buffer.byteLength - 44);
+      }
+    }
+    
+    const mergedBuffer = new ArrayBuffer(44 + totalPcmSize);
+    const view = new DataView(mergedBuffer);
+    
+    const sampleRate = 24000;
+    const numChannels = 1;
+    const bitsPerSample = 16;
+    const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
+    const blockAlign = (numChannels * bitsPerSample) / 8;
+    
+    writeString(view, 0, 'RIFF');
+    view.setUint32(4, 36 + totalPcmSize, true);
+    writeString(view, 8, 'WAVE');
+    
+    writeString(view, 12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitsPerSample, true);
+    
+    writeString(view, 36, 'data');
+    view.setUint32(40, totalPcmSize, true);
+    
+    let offset = 44;
+    const mergedBytes = new Uint8Array(mergedBuffer);
+    for (const buffer of arrayBuffers) {
+      if (buffer.byteLength > 44) {
+        const pcmPart = new Uint8Array(buffer, 44);
+        mergedBytes.set(pcmPart, offset);
+        offset += pcmPart.length;
+      }
+    }
+    
+    return new Blob([mergedBuffer], { type: 'audio/wav' });
+  };
+
+  const updateTotalDuration = () => {
+    let total = 0;
+    for (const chunk of chunksRef.current) {
+      if (chunk.status === 'ready' && chunk.duration > 0) {
+        total += chunk.duration;
+      } else {
+        total += chunk.text.length * 0.08;
+      }
+    }
+    setDuration(total);
+  };
+
+  const triggerNextFetches = () => {
+    if (abortControllerRef.current?.signal.aborted) return;
+    
+    const activeFetches = chunksRef.current.filter(c => c.status === 'fetching').length;
+    const maxConcurrency = 2;
+    if (activeFetches >= maxConcurrency) return;
+    
+    const currentPlayingIdx = currentChunkIndexRef.current;
+    const pendingChunks = chunksRef.current.filter(c => c.index >= currentPlayingIdx && c.status === 'pending');
+    
+    const slotsToFill = maxConcurrency - activeFetches;
+    for (let i = 0; i < Math.min(slotsToFill, pendingChunks.length); i++) {
+      fetchChunk(pendingChunks[i]);
+    }
+  };
+
+  const fetchChunk = async (chunk: AudioChunk) => {
+    if (abortControllerRef.current?.signal.aborted) return;
+    
+    chunk.status = 'fetching';
+    setChunks([...chunksRef.current]);
+    
+    try {
+      const base64Audio = await generatePersianSpeech(chunk.text, selectedVoice);
+      if (abortControllerRef.current?.signal.aborted) return;
+      
+      const audioBytes = decode(base64Audio);
+      const wavBlob = createWavBlob(audioBytes, 24000);
+      const url = URL.createObjectURL(wavBlob);
+      
+      chunk.url = url;
+      chunk.blob = wavBlob;
+      chunk.status = 'ready';
+      setChunks([...chunksRef.current]);
+      
+      const tempAudio = new Audio(url);
+      tempAudio.addEventListener('loadedmetadata', () => {
+        chunk.duration = tempAudio.duration;
+        updateTotalDuration();
+        
+        if (isWaitingForNextChunkRef.current && currentChunkIndexRef.current === chunk.index) {
+          isWaitingForNextChunkRef.current = false;
+          playChunk(chunk.index);
+        }
+      });
+      
+      triggerNextFetches();
+    } catch (err) {
+      console.error(`Failed to fetch chunk ${chunk.index}:`, err);
+      chunk.status = 'failed';
+      setChunks([...chunksRef.current]);
+      
+      if (chunk.index === 0) {
+        throw err;
+      } else {
+        if (isWaitingForNextChunkRef.current && currentChunkIndexRef.current === chunk.index) {
+          isWaitingForNextChunkRef.current = false;
+          playChunk(chunk.index + 1);
+        }
+        triggerNextFetches();
+      }
+    }
+  };
+
+  const playChunk = (index: number) => {
+    if (abortControllerRef.current?.signal.aborted) return;
+    
+    if (index >= chunksRef.current.length) {
+      handleClosePlayer();
+      return;
+    }
+    
+    currentChunkIndexRef.current = index;
+    const chunk = chunksRef.current[index];
+    
+    if (chunk.status === 'ready' && chunk.url) {
+      setStatus(AppStatus.PLAYING);
+      setAudioErrorText(null);
+      if (audioRef.current) {
+        audioRef.current.src = chunk.url;
+        audioRef.current.playbackRate = playbackRate;
+        audioRef.current.play().catch(err => {
+          console.error("Playback execution failed:", err);
+        });
+      }
+    } else if (chunk.status === 'fetching' || chunk.status === 'pending') {
+      isWaitingForNextChunkRef.current = true;
+      setStatus(AppStatus.GENERATING);
+      if (audioRef.current) {
+        audioRef.current.pause();
+      }
+    } else {
+      console.warn(`Chunk ${index} failed. Skipping.`);
+      currentTimeOffsetRef.current += chunk.duration || (chunk.text.length * 0.08);
+      playChunk(index + 1);
+    }
+  };
+
+  const handleSeek = (pos: number) => {
+    const targetTime = pos * duration;
+    let accum = 0;
+    let foundIndex = -1;
+    for (let i = 0; i < chunksRef.current.length; i++) {
+      const chunkDur = chunksRef.current[i].duration || (chunksRef.current[i].text.length * 0.08);
+      if (accum + chunkDur >= targetTime) {
+        foundIndex = i;
+        break;
+      }
+      accum += chunkDur;
+    }
+    
+    if (foundIndex !== -1) {
+      const chunk = chunksRef.current[foundIndex];
+      if (chunk.status === 'ready' && chunk.url) {
+        if (audioRef.current) {
+          audioRef.current.pause();
+          currentTimeOffsetRef.current = accum;
+          currentChunkIndexRef.current = foundIndex;
+          audioRef.current.src = chunk.url;
+          audioRef.current.currentTime = targetTime - accum;
+          audioRef.current.play().catch(e => console.error(e));
+          setStatus(AppStatus.PLAYING);
+        }
+      }
+    }
+  };
+
   useEffect(() => {
     const audio = new Audio();
     audioRef.current = audio;
-    const onTimeUpdate = () => setCurrentTime(audio.currentTime);
-    const onLoadedMetadata = () => { if (isFinite(audio.duration)) setDuration(audio.duration); };
+    
+    const onTimeUpdate = () => {
+      if (chunksRef.current.length > 0) {
+        setCurrentTime(currentTimeOffsetRef.current + audio.currentTime);
+      } else {
+        setCurrentTime(audio.currentTime);
+      }
+    };
+    
+    const onLoadedMetadata = () => {
+      if (chunksRef.current.length > 0) {
+        updateTotalDuration();
+      } else {
+        if (isFinite(audio.duration)) setDuration(audio.duration);
+      }
+    };
+    
     const onPlay = () => setStatus(AppStatus.PLAYING);
     const onPause = () => setStatus(prev => (prev === AppStatus.PLAYING ? AppStatus.IDLE : prev));
-    const onEnded = () => { setStatus(AppStatus.IDLE); };
+    
+    const onEnded = () => {
+      if (chunksRef.current.length > 0) {
+        const currentIdx = currentChunkIndexRef.current;
+        const currentChunk = chunksRef.current[currentIdx];
+        if (currentChunk) {
+          currentTimeOffsetRef.current += currentChunk.duration || (currentChunk.text.length * 0.08);
+        }
+        playChunk(currentIdx + 1);
+      } else {
+        setStatus(AppStatus.IDLE);
+      }
+    };
     
     audio.addEventListener('timeupdate', onTimeUpdate);
     audio.addEventListener('loadedmetadata', onLoadedMetadata);
@@ -528,7 +810,8 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) setOpenDropdown(null);
-      if (historyRef.current && !historyRef.current.contains(event.target as Node)) setShowHistory(false);
+      const isHistoryToggleClick = (event.target as HTMLElement).closest('#history-toggle-btn') || (event.target as HTMLElement).closest('[title="تاریخچه"]');
+      if (historyRef.current && !historyRef.current.contains(event.target as Node) && !isHistoryToggleClick) setShowHistory(false);
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -731,35 +1014,103 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
       if (generatingId) return;
       
       // Reset any active SpeechSynthesis before playing
-      if (typeof window !== 'undefined' && window.speechSynthesis) {
-        window.speechSynthesis.cancel();
-        if (speechTimer.current) { clearInterval(speechTimer.current); speechTimer.current = null; }
-        setUsingSpeechSynthesis(false);
-      }
+      handleClosePlayer();
       
-      const key = `${textToPlay.substring(0, 30)}_${textToPlay.length}_${selectedVoice}`;
-      setShowLongWaitMessage(false); setIsPlayerMinimized(false);
+      setShowLongWaitMessage(false); 
+      setIsPlayerMinimized(false);
+      setAudioErrorText(null);
+      
+      // Setup abort controller for current request sequence
+      abortControllerRef.current = new AbortController();
+      
       const waitTimer = setTimeout(() => setShowLongWaitMessage(true), 5000);
       try {
           setGeneratingId(id);
-          let url = audioCache.current.get(key);
-          if (!url) {
-              const pending = activeRequests.current.get(key);
-              if (pending) { setStatus(AppStatus.GENERATING); url = await pending; }
-              else { setStatus(AppStatus.GENERATING); const base64Audio = await generatePersianSpeech(textToPlay, selectedVoice); const audioBytes = decode(base64Audio); const wavBlob = createWavBlob(audioBytes, 24000); url = URL.createObjectURL(wavBlob); audioCache.current.set(key, url); }
+          
+          // Split text into Persian sentences/chunks
+          const sentences = splitTextIntoSentences(textToPlay);
+          if (sentences.length === 0) {
+            throw new Error("متن برای خواندن خالی است.");
           }
-          clearTimeout(waitTimer); setShowLongWaitMessage(false);
-          if (url) {
-            setAudioUrl(url);
-            if (audioRef.current) { audioRef.current.src = url; audioRef.current.playbackRate = playbackRate; setStatus(AppStatus.PLAYING); try { await audioRef.current.play(); } catch (playErr) { console.error("Autoplay prevented:", playErr); setStatus(AppStatus.IDLE); } }
-          } else throw new Error("Could not generate audio URL");
+          
+          // Initialize chunks list
+          const initialChunks: AudioChunk[] = sentences.map((sentenceText, idx) => ({
+            index: idx,
+            text: sentenceText,
+            url: null,
+            duration: 0,
+            status: 'pending',
+            blob: null
+          }));
+          
+          chunksRef.current = initialChunks;
+          setChunks(initialChunks);
+          currentChunkIndexRef.current = 0;
+          currentTimeOffsetRef.current = 0;
+          isWaitingForNextChunkRef.current = false;
+          
+          // Let the player UI open!
+          setAudioUrl("streaming-audio");
+          setCurrentTime(0);
+          updateTotalDuration();
+          
+          setStatus(AppStatus.GENERATING);
+          
+          // 1. Synchronously fetch the first chunk first (matching "fallback if fails from start")
+          const firstChunk = chunksRef.current[0];
+          firstChunk.status = 'fetching';
+          setChunks([...chunksRef.current]);
+          
+          try {
+            const base64Audio = await generatePersianSpeech(firstChunk.text, selectedVoice);
+            if (abortControllerRef.current.signal.aborted) return;
+            
+            const audioBytes = decode(base64Audio);
+            const wavBlob = createWavBlob(audioBytes, 24000);
+            const url = URL.createObjectURL(wavBlob);
+            
+            firstChunk.url = url;
+            firstChunk.blob = wavBlob;
+            firstChunk.status = 'ready';
+            setChunks([...chunksRef.current]);
+            
+            // Set metadata
+            const tempAudio = new Audio(url);
+            tempAudio.addEventListener('loadedmetadata', () => {
+              firstChunk.duration = tempAudio.duration;
+              updateTotalDuration();
+            });
+            
+            clearTimeout(waitTimer); 
+            setShowLongWaitMessage(false);
+            
+            // Start playback of chunk 0
+            playChunk(0);
+            
+            // Queue up subsequent fetches
+            triggerNextFetches();
+            
+          } catch (firstFetchErr) {
+            console.warn("First chunk TTS failed, falling back to Web Speech API speechSynthesis.", firstFetchErr);
+            clearTimeout(waitTimer); 
+            setShowLongWaitMessage(false);
+            
+            // Fallback for the whole text
+            speakFallback(textToPlay);
+          }
+          
       } catch (e) {
-          console.warn("Server TTS connection failed or timed out. Instantly falling back to Web Speech API Browser engine.", e);
-          clearTimeout(waitTimer); setShowLongWaitMessage(false);
-          checkAndShowQuotaError(e, "تبدیل صوتی متن به گفتار (Text-to-Speech)");
-          speakFallback(textToPlay);
+          console.error("General TTS error:", e);
+          clearTimeout(waitTimer); 
+          setShowLongWaitMessage(false);
+          
+          // Show Farsi error message
+          setAudioErrorText("خطا در برقراری ارتباط با سرویس صوتی هوش مصنوعی. لطفاً دوباره تلاش کنید.");
+          setStatus(AppStatus.ERROR);
+          setTimeout(() => setStatus(AppStatus.IDLE), 5000);
+      } finally { 
+          setGeneratingId(null); 
       }
-      finally { clearTimeout(waitTimer); setShowLongWaitMessage(false); setGeneratingId(null); }
   };
 
   const togglePlayPause = () => {
@@ -778,26 +1129,81 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
       return;
     }
     if (audioRef.current && audioUrl) {
-      if (status === AppStatus.PLAYING) audioRef.current.pause();
-      else audioRef.current.play();
+      if (status === AppStatus.PLAYING) {
+        audioRef.current.pause();
+      } else {
+        if (isWaitingForNextChunkRef.current) {
+          setStatus(AppStatus.GENERATING);
+        } else {
+          audioRef.current.play().catch(e => console.error(e));
+        }
+      }
     }
   };
 
   const handleClosePlayer = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    
     if (usingSpeechSynthesis && typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel();
       if (speechTimer.current) { clearInterval(speechTimer.current); speechTimer.current = null; }
       setUsingSpeechSynthesis(false);
     }
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current.currentTime = 0; }
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current.src = "";
+    }
+    
+    chunksRef.current.forEach(chunk => {
+      if (chunk.url) {
+        URL.revokeObjectURL(chunk.url);
+      }
+    });
+    
     setAudioUrl(null);
+    setChunks([]);
+    chunksRef.current = [];
+    currentChunkIndexRef.current = 0;
+    currentTimeOffsetRef.current = 0;
+    isWaitingForNextChunkRef.current = false;
+    setAudioErrorText(null);
     setStatus(AppStatus.IDLE);
     setGeneratingId(null);
     setIsPlayerMinimized(false);
   };
+
   const toggleMinimize = () => setIsPlayerMinimized(!isPlayerMinimized);
   const cycleSpeed = () => { const idx = SPEEDS.indexOf(playbackRate); const nextIdx = (idx + 1) % SPEEDS.length; setPlaybackRate(SPEEDS[nextIdx]); };
-  const handleDownload = () => { if (audioUrl) { const a = document.createElement('a'); a.href = audioUrl; a.download = `zendia-audio-${Date.now()}.wav`; document.body.appendChild(a); a.click(); document.body.removeChild(a); } };
+  const handleDownload = async () => {
+    if (chunksRef.current.length > 0) {
+      const readyChunks = chunksRef.current.filter(c => c.status === 'ready' && c.blob);
+      if (readyChunks.length > 0) {
+        try {
+          const mergedBlob = await mergeWavBlobs(readyChunks.map(c => c.blob!));
+          const url = URL.createObjectURL(mergedBlob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `zendia-audio-${Date.now()}.wav`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        } catch (err) {
+          console.error("Merging WAV blobs failed:", err);
+        }
+      }
+    } else if (audioUrl && audioUrl !== "speech-synthesis-fallback") {
+      const a = document.createElement('a');
+      a.href = audioUrl;
+      a.download = `zendia-audio-${Date.now()}.wav`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  };
   const handleShare = async () => { if (!text) return; let shareContent = text; if (sources.length > 0) shareContent += "\n\nمنابع:\n" + sources.map(s => `• ${s.title}: ${s.url}`).join('\n'); shareContent += "\n\nShared via Zendia"; try { await navigator.clipboard.writeText(shareContent); setIsCopied(true); setTimeout(() => setIsCopied(false), 2000); } catch (err) { console.error("Failed to copy", err); } };
 
   const handleSendMessage = async (msgText: string = chatInput) => {
@@ -928,8 +1334,14 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
             )}
         </div>
 
+        {/* HISTORY BACKDROP */}
+        <div 
+          onClick={() => setShowHistory(false)}
+          className={`fixed inset-0 bg-black/60 backdrop-blur-[2px] z-[90] transition-opacity duration-300 ${showHistory ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+        />
+
         {/* HISTORY DRAWER */}
-        <div className={`absolute inset-y-0 right-0 w-64 bg-slate-950/95 backdrop-blur-xl border-l border-slate-800 z-50 transition-transform duration-300 ease-out shadow-2xl ${showHistory ? 'translate-x-0' : 'translate-x-full'}`} ref={historyRef}>
+        <div className={`fixed inset-y-0 right-0 w-72 sm:w-80 bg-slate-950/95 backdrop-blur-xl border-l border-slate-800 z-[100] transition-transform duration-300 ease-out shadow-2xl ${showHistory ? 'translate-x-0' : 'translate-x-full'}`} ref={historyRef}>
              <div className="p-4 border-b border-slate-800 flex items-center justify-between">
                  <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2"><svg className="w-4 h-4 text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>تاریخچه تحلیل‌ها</h3>
                  <div className="flex items-center gap-2">
@@ -952,7 +1364,7 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
 
         {/* CENTER CONTENT AREA */}
         <div className="flex-1 relative overflow-hidden flex flex-col w-full">
-            <div className={`absolute inset-0 px-6 pt-2 pb-14 transition-all duration-500 ease-out transform ${viewMode === 'INPUT' ? 'opacity-100 translate-x-0 z-20' : 'opacity-0 translate-x-10 -z-10 pointer-events-none'}`}>
+            <div className={`absolute inset-0 px-8 pt-2 pb-14 transition-all duration-500 ease-out transform ${viewMode === 'INPUT' ? 'opacity-100 translate-x-0 z-20' : 'opacity-0 translate-x-10 -z-10 pointer-events-none'}`}>
                  <div className="h-full w-full flex flex-col pt-0 gap-1 items-center overflow-y-auto no-scrollbar pb-6">
                      {(inputType === 'TOPIC' || inputType === 'DAILY_TOPIC') && (
                          <div className="w-full flex-none flex flex-col items-center gap-2 pb-0">
@@ -1034,7 +1446,7 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
                  </div>
             </div>
 
-            <div className={`absolute inset-0 px-4 flex flex-col transition-all duration-500 ease-out transform ${viewMode === 'CHAT' ? 'opacity-100 translate-x-0 z-20' : 'opacity-0 -translate-x-10 -z-10 pointer-events-none'}`}>
+            <div className={`absolute inset-0 px-6 flex flex-col transition-all duration-500 ease-out transform ${viewMode === 'CHAT' ? 'opacity-100 translate-x-0 z-20' : 'opacity-0 -translate-x-10 -z-10 pointer-events-none'}`}>
                 <div ref={scrollContainerRef} className="flex-1 overflow-y-auto no-scrollbar space-y-4 py-2 pb-4">
                     <div className={`bg-slate-900/40 border rounded-2xl p-4 pb-12 relative group transition-colors duration-500 ${mainCredVis.border} ${mainCredVis.shadow}`}>
                         <button onClick={handleBackToInput} className="absolute -top-2 left-4 px-2 py-0.5 rounded-full border border-slate-700 bg-slate-950 text-slate-400 hover:text-white hover:border-primary-500/50 hover:shadow-[0_0_8px_rgba(34,211,238,0.2)] transition-all flex items-center gap-1 text-[9px] font-bold shadow-lg z-10"><svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" /></svg><span>بازگشت</span></button>
@@ -1155,9 +1567,29 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
                                 <button onClick={toggleMinimize} className="p-1.5 rounded-lg text-slate-400 hover:text-primary-400 hover:bg-slate-800 transition-all" title="کوچک کردن"><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg></button>
                                 <button onClick={handleClosePlayer} className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-950/30 transition-all" title="بستن"><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
                             </div>
-                            <div className="h-10 w-full relative group cursor-pointer" onClick={(e) => { const rect = e.currentTarget.getBoundingClientRect(); const pos = (e.clientX - rect.left) / rect.width; if (usingSpeechSynthesis) { setCurrentTime(pos * duration); } else if (audioRef.current && isFinite(duration)) { audioRef.current.currentTime = pos * duration; } }}><div className="absolute inset-0 opacity-20"><AudioVisualizer isPlaying={status === AppStatus.PLAYING} /></div><div className="absolute bottom-0 left-0 h-1 bg-primary-500 transition-all duration-200" style={{ width: `${(currentTime / (duration || 1)) * 100}%` }}></div><div className="absolute bottom-0 w-full h-1 bg-slate-800/50 -z-10"></div></div>
-                            <div className="flex justify-between px-4 pt-1.5 -mt-1"><span className="text-[10px] font-mono font-bold text-cyan-300 drop-shadow-[0_0_4px_rgba(34,211,238,0.5)]">{formatTime(currentTime)}</span><span className="text-[10px] font-mono font-bold text-slate-400">{formatTime(duration)}</span></div>
-                            <div className="flex items-center justify-between px-6 py-2.5 pt-0.5"><div className="flex items-center gap-3"><button onClick={handleDownload} className="text-slate-500 hover:text-primary-400 transition-colors" title="دانلود"><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg></button><button onClick={cycleSpeed} className="w-8 text-[10px] font-mono font-bold text-slate-500 hover:text-primary-400 transition-colors">{playbackRate}x</button></div><button onClick={togglePlayPause} className="w-12 h-12 bg-primary-500 rounded-full flex items-center justify-center text-slate-900 shadow-[0_0_15px_rgba(34,211,238,0.4)] hover:scale-105 transition-transform">{status === AppStatus.PLAYING ? <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M10 9v6m4-6v6" /></svg> : <svg className="w-6 h-6 ml-0.5" viewBox="0 0 24 24" fill="currentColor"><path fillRule="evenodd" d="M4.5 5.653c0-1.426 1.529-2.33 2.779-1.643l11.54 6.348c1.295.712 1.295 2.573 0 3.285L7.28 19.991c-1.25.687-2.779-.217-2.779-1.643V5.653z" clipRule="evenodd" /></svg>}</button><button onClick={() => { if (viewMode === 'INPUT') setViewMode('CHAT'); else handleBackToInput(); }} className={`p-1.5 rounded-xl border transition-all ${viewMode === 'CHAT' ? 'bg-slate-900 border-primary-500 text-primary-400' : 'border-transparent text-slate-500 hover:text-white'}`} title={viewMode === 'INPUT' ? "نمایش تحلیل" : "بازگشت به ورودی"}>{viewMode === 'INPUT' ? <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg> : <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M11 17l-5-5m0 0l5-5m-5 5h12" /></svg>}</button></div>
+                            
+                            {audioErrorText ? (
+                                <div className="p-4 pt-8 flex flex-col items-center justify-center gap-2 bg-rose-950/20 border border-rose-500/30 rounded-2xl mx-4 my-2" dir="rtl">
+                                    <div className="flex items-center gap-2 text-rose-400">
+                                        <svg className="w-5 h-5 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                        </svg>
+                                        <span className="text-xs font-bold text-right leading-5">{audioErrorText}</span>
+                                    </div>
+                                    <button 
+                                        onClick={handleClosePlayer}
+                                        className="px-3 py-1 rounded-lg bg-rose-500/25 hover:bg-rose-500/40 text-rose-200 text-[10px] font-bold transition-all"
+                                    >
+                                        متوجه شدم
+                                    </button>
+                                </div>
+                            ) : (
+                                <>
+                                    <div className="h-10 w-full relative group cursor-pointer" onClick={(e) => { const rect = e.currentTarget.getBoundingClientRect(); const pos = (e.clientX - rect.left) / rect.width; if (usingSpeechSynthesis) { setCurrentTime(pos * duration); } else if (chunksRef.current.length > 0) { handleSeek(pos); } else if (audioRef.current && isFinite(duration)) { audioRef.current.currentTime = pos * duration; } }}><div className="absolute inset-0 opacity-20"><AudioVisualizer isPlaying={status === AppStatus.PLAYING} /></div><div className="absolute bottom-0 left-0 h-1 bg-primary-500 transition-all duration-200" style={{ width: `${(currentTime / (duration || 1)) * 100}%` }}></div><div className="absolute bottom-0 w-full h-1 bg-slate-800/50 -z-10"></div></div>
+                                    <div className="flex justify-between px-4 pt-1.5 -mt-1"><span className="text-[10px] font-mono font-bold text-cyan-300 drop-shadow-[0_0_4px_rgba(34,211,238,0.5)]">{formatTime(currentTime)}</span><span className="text-[10px] font-mono font-bold text-slate-400">{formatTime(duration)}</span></div>
+                                    <div className="flex items-center justify-between px-6 py-2.5 pt-0.5"><div className="flex items-center gap-3"><button onClick={handleDownload} className="text-slate-500 hover:text-primary-400 transition-colors" title="دانلود"><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg></button><button onClick={cycleSpeed} className="w-8 text-[10px] font-mono font-bold text-slate-500 hover:text-primary-400 transition-colors">{playbackRate}x</button></div><button onClick={togglePlayPause} className="w-12 h-12 bg-primary-500 rounded-full flex items-center justify-center text-slate-900 shadow-[0_0_15px_rgba(34,211,238,0.4)] hover:scale-105 transition-transform">{status === AppStatus.PLAYING ? <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M10 9v6m4-6v6" /></svg> : <svg className="w-6 h-6 ml-0.5" viewBox="0 0 24 24" fill="currentColor"><path fillRule="evenodd" d="M4.5 5.653c0-1.426 1.529-2.33 2.779-1.643l11.54 6.348c1.295.712 1.295 2.573 0 3.285L7.28 19.991c-1.25.687-2.779-.217-2.779-1.643V5.653z" clipRule="evenodd" /></svg>}</button><button onClick={() => { if (viewMode === 'INPUT') setViewMode('CHAT'); else handleBackToInput(); }} className={`p-1.5 rounded-xl border transition-all ${viewMode === 'CHAT' ? 'bg-slate-900 border-primary-500 text-primary-400' : 'border-transparent text-slate-500 hover:text-white'}`} title={viewMode === 'INPUT' ? "نمایش تحلیل" : "بازگشت به ورودی"}>{viewMode === 'INPUT' ? <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg> : <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M11 17l-5-5m0 0l5-5m-5 5h12" /></svg>}</button></div>
+                                </>
+                            )}
                         </div>
                     )}
                 </div>

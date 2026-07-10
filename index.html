@@ -3,6 +3,135 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <script id="app-env-and-error-shield">
+      (function() {
+        // --- 1. Storage & Cookie Shims for Restricted Iframe Environments ---
+        function createStorageShim() {
+          var store = {};
+          return {
+            getItem: function(key) { return store[key] || null; },
+            setItem: function(key, value) { store[key] = String(value); },
+            removeItem: function(key) { delete store[key]; },
+            clear: function() { store = {}; },
+            get length() { return Object.keys(store).length; },
+            key: function(index) { return Object.keys(store)[index] || null; }
+          };
+        }
+
+        try {
+          var testKey = '__storage_test__';
+          window.localStorage.setItem(testKey, testKey);
+          window.localStorage.removeItem(testKey);
+        } catch (e) {
+          console.warn('localStorage is restricted. Applying memory fallback shim.');
+          try {
+            Object.defineProperty(window, 'localStorage', {
+              value: createStorageShim(),
+              writable: true,
+              configurable: true
+            });
+          } catch (err) {
+            window.localStorage = createStorageShim();
+          }
+        }
+
+        try {
+          var testSessionKey = '__session_test__';
+          window.sessionStorage.setItem(testSessionKey, testSessionKey);
+          window.sessionStorage.removeItem(testSessionKey);
+        } catch (e) {
+          console.warn('sessionStorage is restricted. Applying memory fallback shim.');
+          try {
+            Object.defineProperty(window, 'sessionStorage', {
+              value: createStorageShim(),
+              writable: true,
+              configurable: true
+            });
+          } catch (err) {
+            window.sessionStorage = createStorageShim();
+          }
+        }
+
+        // --- 1.5. Make fetch & XMLHttpRequest writable in restricted environments ---
+        try {
+          var originalFetch = window.fetch;
+          if (originalFetch) {
+            var fetchVal = originalFetch;
+            Object.defineProperty(window, 'fetch', {
+              get: function() { return fetchVal; },
+              set: function(val) { fetchVal = val; },
+              configurable: true,
+              enumerable: true
+            });
+          }
+        } catch (e) {
+          console.warn('Could not make window.fetch configurable/writable:', e);
+        }
+
+        try {
+          var originalXHR = window.XMLHttpRequest;
+          if (originalXHR) {
+            var xhrVal = originalXHR;
+            Object.defineProperty(window, 'XMLHttpRequest', {
+              get: function() { return xhrVal; },
+              set: function(val) { xhrVal = val; },
+              configurable: true,
+              enumerable: true
+            });
+          }
+        } catch (e) {
+          console.warn('Could not make window.XMLHttpRequest configurable/writable:', e);
+        }
+
+        // --- 2. Error Filter Shield ---
+        const originalOnError = window.onerror;
+        window.onerror = function(message, source, lineno, colno, error) {
+          const msg = String(message || '');
+          const src = String(source || '');
+          if (
+            msg.includes('Script error') ||
+            msg.includes('eruda') ||
+            src.includes('eruda') ||
+            msg.includes('localStorage') ||
+            msg.includes('SecurityError') ||
+            msg.includes('ResizeObserver loop limit exceeded')
+          ) {
+            console.warn('Filtered out benign global error:', message, 'from', source);
+            return true; // Prevents the browser from firing the default error handler
+          }
+          if (originalOnError) {
+            return originalOnError.apply(this, arguments);
+          }
+          return false;
+        };
+
+        window.addEventListener('error', function(event) {
+          const msg = String(event.message || '');
+          const src = String(event.filename || event.error?.stack || '');
+          if (
+            msg.includes('Script error') ||
+            msg.includes('eruda') ||
+            src.includes('eruda') ||
+            msg.includes('localStorage') ||
+            msg.includes('SecurityError') ||
+            msg.includes('ResizeObserver loop limit exceeded')
+          ) {
+            console.warn('Prevented event propagation for benign error:', msg);
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function(event) {
+          const reason = String(event.reason || '');
+          if (reason.includes('eruda') || reason.includes('SecurityError')) {
+            console.warn('Prevented event propagation for benign promise rejection:', reason);
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        }, true);
+      })();
+    </script>
     <script id="vite-hmr-loop-fix">
       // Prevent Vite's client from going into infinite reload loops when websocket fails/disconnects inside iframe
       (function() {
@@ -137,6 +266,53 @@
 </head>
   <body class="bg-slate-950 text-slate-200 h-screen w-screen overflow-hidden selection:bg-primary-500 selection:text-white">
     <div id="root" class="h-full w-full"></div>
+    <script src="https://cdn.jsdelivr.net/npm/eruda@3.0.1/eruda.min.js" crossorigin="anonymous"></script>
+    <script>
+      (function() {
+        var injectStyle = function() {
+          try {
+            var container = document.getElementById('eruda') || document.querySelector('.eruda-container');
+            if (container && container.shadowRoot) {
+              var style = document.createElement('style');
+              style.innerHTML = '.eruda-entry-btn { display: none !important; }';
+              container.shadowRoot.appendChild(style);
+            }
+          } catch (e) {
+            console.warn('Failed to inject style:', e);
+          }
+        };
+
+        try {
+          if (typeof eruda !== 'undefined') {
+            eruda.init();
+            injectStyle();
+            setTimeout(injectStyle, 50);
+            setTimeout(injectStyle, 200);
+          } else {
+            var erudaScript = document.querySelector('script[src*="eruda"]');
+            if (erudaScript) {
+              erudaScript.onload = function() {
+                try {
+                  if (typeof eruda !== 'undefined') {
+                    eruda.init();
+                    injectStyle();
+                    setTimeout(injectStyle, 50);
+                    setTimeout(injectStyle, 200);
+                  }
+                } catch (innerErr) {
+                  console.warn('Eruda init error after load:', innerErr);
+                }
+              };
+              erudaScript.onerror = function() {
+                console.warn('Eruda could not be loaded from CDN.');
+              };
+            }
+          }
+        } catch (e) {
+          console.warn('Error initializing Eruda:', e);
+        }
+      })();
+    </script>
   <script type="module" src="/index.tsx"></script>
 </body>
 </html>

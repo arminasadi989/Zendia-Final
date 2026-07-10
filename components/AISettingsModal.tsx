@@ -22,7 +22,7 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({
   const [isKeyVisible, setIsKeyVisible] = useState(false);
   const [selectedModelId, setSelectedModelId] = useState<string>(currentSettings.textModel);
   const [selectedTtsModelId, setSelectedTtsModelId] = useState<string>(currentSettings.ttsModel);
-  const [isThinkingEnabled, setIsThinkingEnabled] = useState<boolean>(currentSettings.enableThinking);
+  const [thinkingLevel, setThinkingLevel] = useState<'low' | 'normal' | 'high'>(currentSettings.thinkingLevel || 'low');
   const [isSavedSuccessfully, setIsSavedSuccessfully] = useState(false);
 
   // Sync state if modal opens
@@ -32,7 +32,7 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({
       setApiKey(settings.customApiKey || '');
       setSelectedModelId(settings.textModel);
       setSelectedTtsModelId(settings.ttsModel);
-      setIsThinkingEnabled(settings.enableThinking);
+      setThinkingLevel(settings.thinkingLevel || 'low');
     }
   }, [isOpen]);
 
@@ -45,13 +45,13 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({
     setSelectedModelId(modelId);
     const modelInfo = AVAILABLE_MODELS.find(m => m.id === modelId);
     if (modelInfo && !modelInfo.supportsThinking) {
-      setIsThinkingEnabled(false);
+      setThinkingLevel('low');
     }
   };
 
   const handleSave = () => {
     const trimmedKey = apiKey.trim() || null;
-    setAiSettings(trimmedKey, selectedModelId, isThinkingEnabled, selectedTtsModelId);
+    setAiSettings(trimmedKey, selectedModelId, thinkingLevel, selectedTtsModelId);
     
     setIsSavedSuccessfully(true);
     setTimeout(() => {
@@ -116,7 +116,7 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({
                 type={isKeyVisible ? "text" : "password"}
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder="AIzaSy... or AQ.dotted.key..."
+                placeholder="AIzaSy..."
                 className="w-full bg-slate-950/50 border border-slate-700/50 rounded-xl px-4 py-2.5 text-xs font-mono text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-primary-500/50 focus:ring-1 focus:ring-primary-500/50 transition-all text-left"
                 dir="ltr"
               />
@@ -140,7 +140,7 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({
               </div>
             </div>
             <p className="text-[9px] text-slate-500 leading-relaxed text-justify">
-              این برنامه به طور کامل از قالب کلیدهای کلاسیک (شروع با AIza) و فرمت نوین نقطه‌دار (شروع با .AQ) پشتیبانی می‌کند. کلید به صورت امن در بک‌اند موقت شما پردازش شده و پس از اتمام جلسه پاک خواهد شد.
+              این کلید فقط برای همین جلسه (Session) معتبر است و هیچ‌کجا ذخیره نمی‌شود. با رفرش صفحه، کلید پاک شده و سیستم به حالت پیش‌فرض برمی‌گردد.
             </p>
           </div>
 
@@ -185,24 +185,43 @@ export const AISettingsModal: React.FC<AISettingsModalProps> = ({
           </div>
 
           {/* Section 4: Deep Thinking Toggle */}
-          <div className={`space-y-2 p-3 rounded-xl border ${canThink ? 'bg-slate-950/30 border-slate-800' : 'bg-slate-950/10 border-slate-900 opacity-60'}`}>
-            <div className="flex items-center justify-between">
+          <div className={`space-y-3 p-3 rounded-xl border ${canThink ? 'bg-slate-950/30 border-slate-800' : 'bg-slate-950/10 border-slate-900 opacity-60'}`}>
+            <div className="flex flex-col gap-2">
               <label className="text-xs font-bold flex items-center gap-1.5 text-slate-300">
-                <BrainCircuit className={`w-4 h-4 ${isThinkingEnabled ? 'text-primary-400' : 'text-slate-500'}`} />
+                <BrainCircuit className={`w-4 h-4 ${thinkingLevel !== 'low' ? 'text-primary-400' : 'text-slate-500'}`} />
                 تفکر عمیق (Deep Thinking)
               </label>
               
-              <button
-                disabled={!canThink}
-                onClick={() => setIsThinkingEnabled(!isThinkingEnabled)}
-                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${isThinkingEnabled ? 'bg-primary-500' : 'bg-slate-700'}`}
-              >
-                <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${isThinkingEnabled ? '-translate-x-4' : '-translate-x-0.5'}`} />
-              </button>
+              <div className="grid grid-cols-3 gap-1 bg-slate-950 p-1 rounded-xl">
+                <button
+                  type="button"
+                  disabled={!canThink}
+                  onClick={() => setThinkingLevel('low')}
+                  className={`py-1.5 rounded-lg text-center text-[10px] font-bold transition-all ${thinkingLevel === 'low' ? 'bg-slate-850 text-slate-200 shadow-md border border-slate-700/50' : 'text-slate-500 hover:text-slate-400'}`}
+                >
+                  غیرفعال (Low)
+                </button>
+                <button
+                  type="button"
+                  disabled={!canThink}
+                  onClick={() => setThinkingLevel('normal')}
+                  className={`py-1.5 rounded-lg text-center text-[10px] font-bold transition-all ${thinkingLevel === 'normal' ? 'bg-primary-500/10 text-primary-400 border border-primary-500/20' : 'text-slate-500 hover:text-slate-400'}`}
+                >
+                  معمولی (Normal)
+                </button>
+                <button
+                  type="button"
+                  disabled={!canThink}
+                  onClick={() => setThinkingLevel('high')}
+                  className={`py-1.5 rounded-lg text-center text-[10px] font-bold transition-all ${thinkingLevel === 'high' ? 'bg-primary-500 text-slate-950' : 'text-slate-500 hover:text-slate-400'}`}
+                >
+                  حداکثر (High)
+                </button>
+              </div>
             </div>
             <p className="text-[9px] text-slate-500 leading-relaxed text-justify mt-1">
               {canThink 
-                ? "فعال‌سازی این حالت باعث می‌شود هوش مصنوعی قبل از پاسخ دادن، گام‌به‌گام استدلال کند که دقت را بسیار بالا می‌برد اما ممکن است پاسخ‌دهی کمی طولانی‌تر شود."
+                ? "امکان انتخاب میزان تفکر عمیق هوش مصنوعی: کم (خاموش)، معمولی، یا حداکثر قدرت تفکر برای مسائل پیچیده علمی و استدلال گام‌به‌گام."
                 : "مدل انتخاب شده از قابلیت تفکر عمیق پشتیبانی نمی‌کند."}
             </p>
           </div>

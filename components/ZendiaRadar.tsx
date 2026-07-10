@@ -103,7 +103,7 @@ export const ZendiaRadar: React.FC<ZendiaRadarProps> = ({ isActive, onShowQuotaE
   }, [report]);
 
   return (
-    <div className="w-full h-full flex flex-col gap-4 overflow-y-auto no-scrollbar pb-20 pt-4 px-4 relative">
+    <div className="w-full h-full flex flex-col gap-4 overflow-y-auto no-scrollbar pb-20 pt-4 px-6 md:px-8 relative">
       {loading || (!report && !error && !hasFetched) ? (
         <div className="flex-1 flex flex-col items-center justify-center space-y-4">
           <div className="relative w-24 h-24">
