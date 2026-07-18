@@ -536,7 +536,7 @@ export const TextToSpeech: React.FC<TextToSpeechProps> = ({ onStatusChange, show
       } else {
         buffer = sentence;
       }
-      if (buffer.length >= 35 || buffer.includes('\n')) {
+      if (buffer.length >= 50 || buffer.includes('\n')) {
         mergedSentences.push(buffer.trim());
         buffer = "";
       }
