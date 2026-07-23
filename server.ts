@@ -12,6 +12,12 @@ const app = express();
 // 3000 is only used as a local-dev fallback.
 const PORT = Number(process.env.PORT) || 3000;
 
+// Diagnostic toggle: set DISABLE_SEARCH_GROUNDING=true in Render's
+// Environment tab (no code/GitHub change needed, just a service restart)
+// to test whether Google Search grounding — not the key, not quota in
+// general — is what's actually causing the 429s on every model.
+const DISABLE_GROUNDING = process.env.DISABLE_SEARCH_GROUNDING === "true";
+
 // Increase JSON payload limits (base64 audio / long chat history payloads)
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ limit: "10mb", extended: true }));
@@ -491,7 +497,7 @@ app.post("/api/analyze-topic", async (req, res) => {
     const ai = getGenAI();
     const { model, config, usedModelInfo } = buildTextModelConfig();
     const response = await generateWithRetry(() =>
-      ai.models.generateContent({ model, contents: [{ parts: [{ text: prompt }] }], config: { ...config, tools: [{ googleSearch: {} }] } })
+      ai.models.generateContent({ model, contents: [{ parts: [{ text: prompt }] }], config: DISABLE_GROUNDING ? config : { ...config, tools: [{ googleSearch: {} }] } })
     );
     const result: any = processAnalysisResponse(response);
     result.usedModel = usedModelInfo;
@@ -547,7 +553,7 @@ app.post("/api/analyze-daily", async (req, res) => {
     const ai = getGenAI();
     const { model, config, usedModelInfo } = buildTextModelConfig();
     const response = await generateWithRetry(() =>
-      ai.models.generateContent({ model, contents: [{ parts: [{ text: prompt }] }], config: { ...config, tools: [{ googleSearch: {} }] } })
+      ai.models.generateContent({ model, contents: [{ parts: [{ text: prompt }] }], config: DISABLE_GROUNDING ? config : { ...config, tools: [{ googleSearch: {} }] } })
     );
     const result: any = processAnalysisResponse(response);
     result.usedModel = usedModelInfo;
@@ -578,7 +584,7 @@ app.post("/api/analyze-url", async (req, res) => {
 
     try {
       const response = await generateWithRetry(() =>
-        ai.models.generateContent({ model, contents: [{ parts: [{ text: prompt }] }], config: { ...config, tools: [{ googleSearch: {} }] } })
+        ai.models.generateContent({ model, contents: [{ parts: [{ text: prompt }] }], config: DISABLE_GROUNDING ? config : { ...config, tools: [{ googleSearch: {} }] } })
       );
       const result: any = processAnalysisResponse(response);
       result.usedModel = usedModelInfo;
@@ -623,7 +629,7 @@ app.post("/api/ask-question", async (req, res) => {
 
     try {
       const response = await generateWithRetry(() =>
-        ai.models.generateContent({ model, contents: [{ parts: [{ text: prompt }] }], config: { ...config, tools: [{ googleSearch: {} }] } })
+        ai.models.generateContent({ model, contents: [{ parts: [{ text: prompt }] }], config: DISABLE_GROUNDING ? config : { ...config, tools: [{ googleSearch: {} }] } })
       );
       const result: any = processQAResponse(response);
       result.usedModel = usedModelInfo;
@@ -667,7 +673,7 @@ app.post("/api/radar-report", async (req, res) => {
     const ai = getGenAI();
     const { model, config, usedModelInfo } = buildTextModelConfig();
     const response = await generateWithRetry(() =>
-      ai.models.generateContent({ model, contents: [{ parts: [{ text: prompt }] }], config: { ...config, tools: [{ googleSearch: {} }] } })
+      ai.models.generateContent({ model, contents: [{ parts: [{ text: prompt }] }], config: DISABLE_GROUNDING ? config : { ...config, tools: [{ googleSearch: {} }] } })
     );
     let text = response.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error("No response received.");
@@ -719,7 +725,7 @@ app.post("/api/supplementary-news", async (req, res) => {
         ai.models.generateContent({
           model,
           contents: [{ parts: [{ text: finalPrompt }] }],
-          config: withSearch ? { ...config, tools: [{ googleSearch: {} }] } : config,
+          config: withSearch && !DISABLE_GROUNDING ? { ...config, tools: [{ googleSearch: {} }] } : config,
         })
       );
       let textResponse = response.candidates?.[0]?.content?.parts?.[0]?.text;
