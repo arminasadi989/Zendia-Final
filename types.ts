@@ -41,16 +41,14 @@ export interface AIModelOption {
 }
 
 export const AVAILABLE_MODELS: AIModelOption[] = [
-  { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash (Default)', supportsThinking: true },
-  { id: 'gemini-3.0-flash', name: 'Gemini 3 Flash', supportsThinking: true },
-  { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', supportsThinking: false },
-  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', supportsThinking: true },
-  { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', supportsThinking: false }
+  { id: 'gemini-3.6-flash', name: 'Gemini 3.6 Flash (جدید، پیش‌فرض)', supportsThinking: true },
+  { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', supportsThinking: true },
+  { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash Lite (جدید)', supportsThinking: true },
+  { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', supportsThinking: false }
 ];
 
 export const AVAILABLE_TTS_MODELS: AIModelOption[] = [
-  { id: 'gemini-3.1-flash-tts-preview', name: 'Gemini 3.1 Flash TTS (Default)', supportsThinking: false },
-  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash TTS', supportsThinking: false }
+  { id: 'gemini-3.1-flash-tts-preview', name: 'Gemini 3.1 Flash TTS (Default)', supportsThinking: false }
 ];
 
 export interface UsedModelInfo {

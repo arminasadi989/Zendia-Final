@@ -29,22 +29,23 @@ app.use(express.urlencoded({ limit: "10mb", extended: true }));
 // has been removed at the user's request as unnecessary complexity.
 // ----------------------------------------------------------------------------
 let customApiKey: string | null = null;
-let selectedTextModel: string = "gemini-3.5-flash";
+let selectedTextModel: string = "gemini-3.6-flash";
 let selectedTtsModel: string = "gemini-3.1-flash-tts-preview";
 let thinkingLevel: "low" | "normal" | "high" = "low";
 
 const ALLOWED_TEXT_MODELS: Record<string, boolean> = {
+  "gemini-3.6-flash": true,
   "gemini-3.5-flash": true,
-  "gemini-3.0-flash": true,
+  "gemini-3.5-flash-lite": true,
   "gemini-3.1-flash-lite": true,
-  "gemini-2.5-flash": true,
-  "gemini-2.5-flash-lite": true,
 };
-const THINKING_CAPABLE_MODELS = new Set(["gemini-3.5-flash", "gemini-3.0-flash", "gemini-2.5-flash"]);
+const THINKING_CAPABLE_MODELS = new Set(["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]);
+// Gemini 3.6 Flash / 3.5 Flash-Lite require removing deprecated sampling
+// params (temperature/top_p/top_k) per Google's migration guide (2026-07-21).
+const NO_LEGACY_SAMPLING_PARAMS = new Set(["gemini-3.6-flash", "gemini-3.5-flash-lite"]);
 
 const ALLOWED_TTS_MODELS: Record<string, boolean> = {
   "gemini-3.1-flash-tts-preview": true,
-  "gemini-2.5-flash": true,
 };
 
 function getGenAI(): GoogleGenAI {
@@ -62,7 +63,7 @@ function getGenAI(): GoogleGenAI {
 app.post("/api/settings", (req, res) => {
   const { apiKey, model, thinking, ttsModel } = req.body;
   customApiKey = apiKey || null;
-  selectedTextModel = model && ALLOWED_TEXT_MODELS[model] ? model : "gemini-3.5-flash";
+  selectedTextModel = model && ALLOWED_TEXT_MODELS[model] ? model : "gemini-3.6-flash";
   const supportsThinking = THINKING_CAPABLE_MODELS.has(selectedTextModel);
   thinkingLevel = supportsThinking && (thinking === "low" || thinking === "normal" || thinking === "high") ? thinking : "low";
   selectedTtsModel = ttsModel && ALLOWED_TTS_MODELS[ttsModel] ? ttsModel : "gemini-3.1-flash-tts-preview";
@@ -80,8 +81,10 @@ function buildTextModelConfig() {
 
   const config: any = {
     systemInstruction: "You are a helpful AI.",
-    temperature: 0.7,
   };
+  if (!NO_LEGACY_SAMPLING_PARAMS.has(modelId)) {
+    config.temperature = 0.7;
+  }
 
   if (supportsThinking && thinkingLevel !== "low") {
     if (modelId.startsWith("gemini-3.")) {
