@@ -19,22 +19,21 @@ import {
 // ============================================================================
 
 let customApiKey: string | null = null;
-let selectedTextModel: string = "gemini-3.5-flash";
+let selectedTextModel: string = "gemini-3.6-flash";
 let selectedTtsModel: string = "gemini-3.1-flash-tts-preview";
 let thinkingLevel: "low" | "normal" | "high" = "low";
 
 const VALID_MODEL_ORDER = [
+  "gemini-3.6-flash",
   "gemini-3.5-flash",
-  "gemini-3.0-flash",
+  "gemini-3.5-flash-lite",
   "gemini-3.1-flash-lite",
-  "gemini-2.5-flash",
-  "gemini-2.5-flash-lite",
 ];
 
-const VALID_TTS_MODEL_ORDER = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash"];
+const VALID_TTS_MODEL_ORDER = ["gemini-3.1-flash-tts-preview"];
 
 export const getValidModelId = (model: string): string =>
-  VALID_MODEL_ORDER.includes(model) ? model : "gemini-3.5-flash";
+  VALID_MODEL_ORDER.includes(model) ? model : "gemini-3.6-flash";
 
 export const getValidTtsModelId = (model: string): string =>
   VALID_TTS_MODEL_ORDER.includes(model) ? model : "gemini-3.1-flash-tts-preview";
